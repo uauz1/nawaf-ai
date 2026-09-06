@@ -1,0 +1,11 @@
+.smart-options{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;padding:2px 0 4px;animation:smartOptionsIn .18s ease-out}
+.smart-option{border:1px solid rgba(125,105,255,.22);background:rgba(18,30,46,.92);color:#e8ecf5;border-radius:999px;min-height:38px;padding:8px 12px;display:inline-flex;align-items:center;gap:7px;transition:transform .14s ease,background .14s ease,border-color .14s ease}
+.smart-option span{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:rgba(112,88,255,.14);color:#bfb4ff;font-size:13px;font-weight:800}
+.smart-option b{font-size:13px;font-weight:700}
+.smart-option:active{transform:scale(.96);background:rgba(29,43,64,.96);border-color:rgba(125,105,255,.38)}
+.messages{scroll-behavior:smooth;overscroll-behavior:contain}
+.message>div{transition:transform .16s ease,opacity .16s ease}
+.composer textarea{transition:border-color .16s ease,background .16s ease}
+.composer textarea:focus{border-color:rgba(112,88,255,.35);background:#101b2a}
+@keyframes smartOptionsIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@media (max-width:560px){.smart-options{gap:6px}.smart-option{min-height:36px;padding:7px 10px}.smart-option b{font-size:12px}}
