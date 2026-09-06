@@ -1,0 +1,86 @@
+const MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'];
+
+function pcm16ToWavBase64(pcmBase64, sampleRate = 24000) {
+  const pcm = Buffer.from(pcmBase64, 'base64');
+  const header = Buffer.alloc(44);
+  const channels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * channels * bitsPerSample / 8;
+  const blockAlign = channels * bitsPerSample / 8;
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]).toString('base64');
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { text, apiKey: userApiKey } = req.body || {};
+  const apiKey = typeof userApiKey === 'string' && userApiKey.trim()
+    ? userApiKey.trim()
+    : process.env.GEMINI_API_KEY;
+
+  if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
+  if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
+
+  const prompt = `اقرئي النص التالي بصوت أنثوي سعودي شاب وطبيعي وواضح. الأسلوب ودي وتفاعلي وكأنك تتكلمين مع نواف مباشرة. استخدمي نبرة سعودية خفيفة ومفهومة، سرعة طبيعية مائلة للسرعة، بدون فصحى ثقيلة وبدون تمثيل مبالغ فيه. لا تضيفي أي كلمات غير موجودة في النص.\n\nالنص:\n${text.slice(0, 5000)}`;
+
+  let lastError;
+  for (const model of MODELS) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              languageCode: 'ar-XA',
+              voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } }
+            }
+          }
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        lastError = data?.error?.message || `TTS failed (${response.status})`;
+        if (response.status === 429 || response.status === 503) continue;
+        return res.status(response.status).json({ error: lastError, code: 'TTS_ERROR' });
+      }
+
+      const part = data?.candidates?.[0]?.content?.parts?.find(p => p?.inlineData?.data);
+      if (!part?.inlineData?.data) {
+        lastError = 'Empty audio response';
+        continue;
+      }
+
+      const mime = part.inlineData.mimeType || 'audio/L16;rate=24000';
+      const rateMatch = /rate=(\d+)/i.exec(mime);
+      const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
+      const wavBase64 = /audio\/(wav|wave)/i.test(mime)
+        ? part.inlineData.data
+        : pcm16ToWavBase64(part.inlineData.data, sampleRate);
+
+      return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model });
+    } catch (error) {
+      lastError = error?.message || 'TTS request failed';
+    }
+  }
+
+  return res.status(503).json({ error: lastError || 'تعذر توليد الصوت الآن', code: 'TTS_BUSY' });
+}
