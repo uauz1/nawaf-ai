@@ -50,8 +50,8 @@ function speakDeviceFallback(text, onEnd) {
   if (!text || !('speechSynthesis' in window)) { onEnd?.(); return false; }
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'ar-SA';
-  u.rate = 1.04;
-  u.pitch = 1.12;
+  u.rate = 1.08;
+  u.pitch = 1.1;
   u.volume = 1;
   const voice = pickSaudiFemaleVoice();
   if (voice) u.voice = voice;
@@ -75,14 +75,11 @@ async function fetchGeminiAudio(text, apiKey) {
 function splitForFastSpeech(text) {
   const cleaned = String(text || '').replace(/\[IMAGE_REQUEST\]/g,'').trim();
   if (!cleaned) return [];
-  const pieces = cleaned.match(/[^.!؟\n]+[.!؟]?/g)?.map(x=>x.trim()).filter(Boolean) || [cleaned];
-  if (pieces.length <= 1) {
-    const words = cleaned.split(/\s+/);
-    if (words.length <= 18) return [cleaned];
-    return [words.slice(0,18).join(' '), words.slice(18).join(' ')];
-  }
-  const first = pieces.shift();
-  return [first, pieces.join(' ')].filter(Boolean);
+  const words = cleaned.split(/\s+/);
+  if (words.length <= 10) return [cleaned];
+  const first = words.slice(0,10).join(' ');
+  const rest = words.slice(10).join(' ');
+  return [first, rest].filter(Boolean);
 }
 
 async function speakGeminiSaudiFast(text, apiKey, onEnd, onFallback) {
@@ -101,6 +98,7 @@ async function speakGeminiSaudiFast(text, apiKey, onEnd, onFallback) {
       if (!data || generation !== audioGeneration) return resolve();
       const audio = new Audio(`data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`);
       activeAudio = audio;
+      audio.preload = 'auto';
       audio.onended = () => { if (activeAudio === audio) activeAudio = null; resolve(); };
       audio.onerror = () => { if (activeAudio === audio) activeAudio = null; reject(new Error('audio playback failed')); };
       audio.play().catch(reject);
@@ -144,7 +142,7 @@ function SettingsModal({ settings, setSettings, onClose }) {
       </div>
       <div className="settings-list">
         <button onClick={()=>toggle('voiceReplies')}><span><b>الرد بالصوت</b><small>نفس صوت Gemini الحالي لكن يبدأ أسرع</small></span><i className={settings.voiceReplies?'switch on':'switch'}><em/></i></button>
-        <button onClick={()=>toggle('continuousVoice')}><span><b>محادثة صوتية مستمرة</b><small>يرد ثم يرجع يسمعك تلقائيًا</small></span><i className={settings.continuousVoice?'switch on':'switch'}><em/></i></button>
+        <button onClick={()=>toggle('continuousVoice')}><span><b>محادثة صوتية مستمرة</b><small>يرد ثم يرجع يسمعك تلقائيًا بدون ضغط جديد</small></span><i className={settings.continuousVoice?'switch on':'switch'}><em/></i></button>
         <button onClick={()=>toggle('rain')}><span><b>تأثير المطر</b><small>مطر أوضح وأنعم فوق الخلفية</small></span><i className={settings.rain?'switch on':'switch'}><em/></i></button>
         <button onClick={()=>toggle('motion')}><span><b>الحركات والأنيميشن</b><small>تفعيل الحركات الخفيفة</small></span><i className={settings.motion?'switch on':'switch'}><em/></i></button>
       </div>
@@ -162,50 +160,120 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
   const [error,setError]=useState('');
   const recognitionRef=useRef(null);
   const restartRef=useRef(false);
+  const retryTimerRef=useRef(null);
+  const loadingRef=useRef(false);
+  const speakingRef=useRef(false);
+  const messagesRef=useRef([]);
+
+  useEffect(()=>{ loadingRef.current=loading; },[loading]);
+  useEffect(()=>{ speakingRef.current=speaking; },[speaking]);
+  useEffect(()=>{ messagesRef.current=messages; },[messages]);
+
+  const clearRetry=()=>{
+    if(retryTimerRef.current){clearTimeout(retryTimerRef.current);retryTimerRef.current=null;}
+  };
 
   const stopVoice=()=>{
     restartRef.current=false;
-    recognitionRef.current?.stop?.();
+    clearRetry();
+    try{recognitionRef.current?.abort?.();}catch{}
+    recognitionRef.current=null;
     stopAllSpeech();
     setListening(false); setSpeaking(false);
   };
 
   useEffect(()=>()=>stopVoice(),[]);
 
-  const beginListening=()=>{
+  const scheduleListeningRestart=(delay=220)=>{
+    clearRetry();
+    if(!continuousVoice||!restartRef.current||loadingRef.current||speakingRef.current)return;
+    retryTimerRef.current=setTimeout(()=>{
+      if(continuousVoice&&restartRef.current&&!loadingRef.current&&!speakingRef.current) beginListening(true);
+    },delay);
+  };
+
+  const beginListening=(automatic=false)=>{
     const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!Recognition){setError('المحادثة الصوتية غير مدعومة في هذا المتصفح. افتح الموقع من Safari أو Chrome واسمح للمايك.');return;}
+    if(!Recognition){
+      setError('المحادثة الصوتية غير مدعومة في هذا المتصفح. افتح الموقع من Safari أو Chrome واسمح للمايك.');
+      restartRef.current=false;
+      return;
+    }
+    if(listening||loadingRef.current||speakingRef.current)return;
+    clearRetry();
     stopAllSpeech();
+    try{recognitionRef.current?.abort?.();}catch{}
+
     const r=new Recognition();
-    r.lang='ar-SA'; r.interimResults=true; r.continuous=false;
+    r.lang='ar-SA';
+    r.interimResults=true;
+    r.continuous=false;
+    r.maxAlternatives=1;
     let finalText='';
-    r.onstart=()=>{setListening(true);setSpeaking(false);setError('');};
+    let gotSpeech=false;
+    let hadFatalError=false;
+
+    r.onstart=()=>{
+      setListening(true);
+      setSpeaking(false);
+      setError('');
+      restartRef.current=true;
+    };
+    r.onspeechstart=()=>{gotSpeech=true;};
     r.onresult=e=>{
       let live='';
       for(let i=e.resultIndex;i<e.results.length;i++){
         const t=e.results[i][0].transcript;
         if(e.results[i].isFinal) finalText+=t+' '; else live+=t;
       }
+      if((finalText+live).trim())gotSpeech=true;
       setValue((finalText+live).trim());
     };
-    r.onerror=e=>{setListening(false); if(e?.error==='not-allowed')setError('اسمح للموقع باستخدام الميكروفون ثم جرّب مرة ثانية.');};
+    r.onerror=e=>{
+      setListening(false);
+      const code=e?.error;
+      if(code==='not-allowed'||code==='service-not-allowed'){
+        hadFatalError=true;
+        restartRef.current=false;
+        setError('اسمح للموقع باستخدام الميكروفون ثم جرّب مرة ثانية.');
+      }else if(code==='audio-capture'){
+        hadFatalError=true;
+        restartRef.current=false;
+        setError('تعذر الوصول للمايك. تأكد أن المتصفح مسموح له باستخدام الميكروفون.');
+      }
+    };
     r.onend=()=>{
       setListening(false);
+      if(recognitionRef.current===r)recognitionRef.current=null;
       const text=finalText.trim();
-      if(text) sendMessage(text,true);
+      if(text){
+        sendMessage(text,true);
+        return;
+      }
+      if(!hadFatalError&&restartRef.current&&continuousVoice){
+        scheduleListeningRestart(gotSpeech?180:(automatic?350:260));
+      }
     };
     recognitionRef.current=r;
     restartRef.current=true;
-    r.start();
+    try{r.start();}
+    catch(err){
+      recognitionRef.current=null;
+      setListening(false);
+      if(automatic&&continuousVoice&&restartRef.current)scheduleListeningRestart(450);
+      else setError('تعذر بدء الاستماع. جرّب مرة ثانية.');
+    }
   };
 
   const finishSpeaking=()=>{
     setSpeaking(false);
-    if(continuousVoice&&restartRef.current) setTimeout(beginListening,120);
+    speakingRef.current=false;
+    if(continuousVoice&&restartRef.current) scheduleListeningRestart(180);
   };
 
   const speakReply=(text)=>{
     setSpeaking(true);
+    speakingRef.current=true;
     speakGeminiSaudiFast(text, apiKey, finishSpeaking, ()=>{
       speakDeviceFallback(String(text).replace(/\[IMAGE_REQUEST\]/g,''), finishSpeaking);
     });
@@ -213,12 +281,20 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
 
   const sendMessage=async(forcedText,fromVoice=false)=>{
     const message=(forcedText ?? value).trim();
-    if(!message||loading)return;
-    if(recognitionRef.current) recognitionRef.current.stop?.();
+    if(!message||loadingRef.current)return;
+    clearRetry();
+    try{recognitionRef.current?.abort?.();}catch{}
+    recognitionRef.current=null;
+    setListening(false);
     const directUrl = extractUrl(message);
     if (directUrl && /(افتح|فتح|ودني|روح)/i.test(message)) window.open(directUrl,'_blank','noopener,noreferrer');
-    const nextHistory=[...messages,{role:'user',text:message}];
-    setMessages(nextHistory); setValue(''); setLoading(true); setError('');
+    const nextHistory=[...messagesRef.current,{role:'user',text:message}];
+    setMessages(nextHistory);
+    messagesRef.current=nextHistory;
+    setValue('');
+    setLoading(true);
+    loadingRef.current=true;
+    setError('');
     try{
       const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,history:nextHistory.slice(-20),apiKey:apiKey?.trim()||undefined})});
       const data=await response.json();
@@ -226,21 +302,27 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
       const cleanText=String(data.text||'').replace(/^\[IMAGE_REQUEST\]\s*/,'').trim();
       const withReply=[...nextHistory,{role:'assistant',text:cleanText}];
       setMessages(withReply);
+      messagesRef.current=withReply;
       maybeDirectOpen(message, data.text);
       if(voiceReplies||fromVoice) speakReply(cleanText);
-      else if(continuousVoice&&fromVoice&&restartRef.current) setTimeout(beginListening,120);
-    }catch(err){setError(err.message||'تعذر الاتصال بالذكاء الاصطناعي');}
-    finally{setLoading(false);}
+      else if(continuousVoice&&fromVoice&&restartRef.current) scheduleListeningRestart(180);
+    }catch(err){
+      setError(err.message||'تعذر الاتصال بالذكاء الاصطناعي');
+      if(continuousVoice&&fromVoice&&restartRef.current) scheduleListeningRestart(700);
+    }finally{
+      setLoading(false);
+      loadingRef.current=false;
+    }
   };
 
-  const toggleListening=()=> listening?stopVoice():beginListening();
+  const toggleListening=()=> listening?stopVoice():beginListening(false);
 
   return <div className="modal-backdrop" onClick={onClose}>
     <section className="sheet action-sheet chat-sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-head"><div><small>{action.emoji}</small><h3>{action.title}</h3></div><button onClick={onClose}><X/></button></div>
-      <div className="voice-state"><span className={listening?'dot live':speaking?'dot speaking':'dot'}></span>{listening?'أسمعك الآن...':speaking?'قاعد أرد عليك...':continuousVoice?'المحادثة الصوتية جاهزة':'جاهز'}</div>
+      <div className="voice-state"><span className={listening?'dot live':speaking?'dot speaking':'dot'}></span>{listening?'أسمعك الآن...':speaking?'قاعد أرد عليك...':loading?'أفكر وأجهز الرد...':continuousVoice&&restartRef.current?'برجع أسمعك تلقائيًا':'المحادثة الصوتية جاهزة'}</div>
       <div className="chat-messages">
-        {!messages.length&&<div className="chat-empty">تكلم معي طبيعي. الرد الصوتي يبدأ بسرعة ويحافظ على نفس الصوت الحالي.</div>}
+        {!messages.length&&<div className="chat-empty">اضغط المايك مرة واحدة وابدأ. بعدها أرد عليك صوتيًا وأرجع أسمعك تلقائيًا بدون ضغط جديد.</div>}
         {messages.map((m,i)=><div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
         {loading&&<div className="bubble assistant typing">أفكر...</div>}
       </div>
