@@ -6,15 +6,18 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const { message, history = [], apiKey: userApiKey } = req.body || {};
+  const apiKey = typeof userApiKey === 'string' && userApiKey.trim()
+    ? userApiKey.trim()
+    : process.env.GEMINI_API_KEY;
+
   if (!apiKey) {
     return res.status(503).json({
-      error: 'GEMINI_API_KEY is not configured',
+      error: 'Gemini API key is not configured',
       code: 'MISSING_API_KEY'
     });
   }
 
-  const { message, history = [] } = req.body || {};
   if (!message || typeof message !== 'string') {
     return res.status(400).json({ error: 'Message is required' });
   }
