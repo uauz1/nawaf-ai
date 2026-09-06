@@ -24,6 +24,17 @@ const projectData = {
   }
 };
 
+let activeAudio = null;
+
+function stopAllSpeech() {
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio.src = '';
+    activeAudio = null;
+  }
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
 function pickSaudiFemaleVoice() {
   if (!('speechSynthesis' in window)) return null;
   const voices = window.speechSynthesis.getVoices();
@@ -33,9 +44,9 @@ function pickSaudiFemaleVoice() {
   return saudi.find(v => femaleHints.test(v.name)) || arabic.find(v => femaleHints.test(v.name)) || saudi[0] || arabic[0] || null;
 }
 
-function speakSaudi(text, onEnd) {
+function speakDeviceFallback(text, onEnd) {
   if (!text || !('speechSynthesis' in window)) { onEnd?.(); return false; }
-  window.speechSynthesis.cancel();
+  stopAllSpeech();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'ar-SA';
   u.rate = 1.02;
@@ -49,6 +60,27 @@ function speakSaudi(text, onEnd) {
   return true;
 }
 
+async function speakGeminiSaudi(text, apiKey, onEnd, onFallback) {
+  if (!text) { onEnd?.(); return; }
+  stopAllSpeech();
+  try {
+    const response = await fetch('/api/tts', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ text, apiKey:apiKey?.trim() || undefined })
+    });
+    const data = await response.json();
+    if (!response.ok || !data?.audioBase64) throw new Error(data?.error || 'تعذر توليد الصوت');
+    const audio = new Audio(`data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`);
+    activeAudio = audio;
+    audio.onended = () => { if (activeAudio === audio) activeAudio = null; onEnd?.(); };
+    audio.onerror = () => { if (activeAudio === audio) activeAudio = null; onFallback?.(); };
+    await audio.play();
+  } catch (error) {
+    onFallback?.(error);
+  }
+}
+
 function SettingsModal({ settings, setSettings, onClose }) {
   const toggle = key => setSettings(s => ({...s,[key]:!s[key]}));
   const hasKey = Boolean(settings.geminiApiKey?.trim());
@@ -56,11 +88,11 @@ function SettingsModal({ settings, setSettings, onClose }) {
     <section className="sheet settings-sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-head"><div><small>Nawaf AI</small><h3>الإعدادات</h3></div><button onClick={onClose}><X/></button></div>
       <div className="api-key-card">
-        <div className="api-key-head"><div><b>Gemini API Key</b><small>مفتاح الذكاء الاصطناعي</small></div><span className={hasKey?'key-status ready':'key-status'}>{hasKey?'مضاف':'غير مضاف'}</span></div>
+        <div className="api-key-head"><div><b>Gemini API Key</b><small>مفتاح الذكاء الاصطناعي والصوت الاحترافي</small></div><span className={hasKey?'key-status ready':'key-status'}>{hasKey?'مضاف':'غير مضاف'}</span></div>
         <input type="password" value={settings.geminiApiKey||''} onChange={e=>setSettings(s=>({...s,geminiApiKey:e.target.value}))} placeholder="AIza..." dir="ltr" autoComplete="off"/>
       </div>
       <div className="settings-list">
-        <button onClick={()=>toggle('voiceReplies')}><span><b>الرد بالصوت</b><small>قراءة ردود المساعد بصوت أنثوي عربي</small></span><i className={settings.voiceReplies?'switch on':'switch'}><em/></i></button>
+        <button onClick={()=>toggle('voiceReplies')}><span><b>الرد بالصوت</b><small>Gemini TTS بصوت Aoede الأنثوي، مع صوت الجهاز كاحتياط</small></span><i className={settings.voiceReplies?'switch on':'switch'}><em/></i></button>
         <button onClick={()=>toggle('continuousVoice')}><span><b>محادثة صوتية مستمرة</b><small>بعد ما تخلص كلامك يرد تلقائيًا ثم يرجع يسمعك</small></span><i className={settings.continuousVoice?'switch on':'switch'}><em/></i></button>
         <button onClick={()=>toggle('rain')}><span><b>تأثير المطر</b><small>إظهار المطر فوق الخلفية</small></span><i className={settings.rain?'switch on':'switch'}><em/></i></button>
         <button onClick={()=>toggle('motion')}><span><b>الحركات والأنيميشن</b><small>تفعيل الحركات الخفيفة</small></span><i className={settings.motion?'switch on':'switch'}><em/></i></button>
@@ -83,7 +115,7 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
   const stopVoice=()=>{
     restartRef.current=false;
     recognitionRef.current?.stop?.();
-    if('speechSynthesis' in window) window.speechSynthesis.cancel();
+    stopAllSpeech();
     setListening(false); setSpeaking(false);
   };
 
@@ -92,7 +124,7 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
   const beginListening=()=>{
     const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!Recognition){setError('المحادثة الصوتية غير مدعومة في هذا المتصفح. افتح الموقع من Safari أو Chrome واسمح للمايك.');return;}
-    if('speechSynthesis' in window) window.speechSynthesis.cancel();
+    stopAllSpeech();
     const r=new Recognition();
     r.lang='ar-SA'; r.interimResults=true; r.continuous=false;
     let finalText='';
@@ -116,6 +148,18 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
     r.start();
   };
 
+  const finishSpeaking=()=>{
+    setSpeaking(false);
+    if(continuousVoice&&restartRef.current) setTimeout(beginListening,220);
+  };
+
+  const speakReply=(text)=>{
+    setSpeaking(true);
+    speakGeminiSaudi(text, apiKey, finishSpeaking, ()=>{
+      speakDeviceFallback(text, finishSpeaking);
+    });
+  };
+
   const sendMessage=async(forcedText,fromVoice=false)=>{
     const message=(forcedText ?? value).trim();
     if(!message||loading)return;
@@ -128,15 +172,8 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
       if(!response.ok) throw new Error(data?.error||'تعذر الحصول على رد');
       const withReply=[...nextHistory,{role:'assistant',text:data.text}];
       setMessages(withReply);
-      if(voiceReplies||fromVoice){
-        setSpeaking(true);
-        speakSaudi(data.text,()=>{
-          setSpeaking(false);
-          if(continuousVoice&&restartRef.current) setTimeout(beginListening,250);
-        });
-      } else if(continuousVoice&&fromVoice&&restartRef.current){
-        setTimeout(beginListening,250);
-      }
+      if(voiceReplies||fromVoice) speakReply(data.text);
+      else if(continuousVoice&&fromVoice&&restartRef.current) setTimeout(beginListening,220);
     }catch(err){setError(err.message||'تعذر الاتصال بالذكاء الاصطناعي');}
     finally{setLoading(false);}
   };
@@ -146,9 +183,9 @@ function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVo
   return <div className="modal-backdrop" onClick={onClose}>
     <section className="sheet action-sheet chat-sheet" onClick={e=>e.stopPropagation()}>
       <div className="sheet-head"><div><small>{action.emoji}</small><h3>{action.title}</h3></div><button onClick={onClose}><X/></button></div>
-      <div className="voice-state"><span className={listening?'dot live':speaking?'dot speaking':'dot'}></span>{listening?'أسمعك الآن...':speaking?'قاعد أرد عليك...':continuousVoice?'المحادثة الصوتية جاهزة':'جاهز'}</div>
+      <div className="voice-state"><span className={listening?'dot live':speaking?'dot speaking':'dot'}></span>{listening?'أسمعك الآن...':speaking?'قاعد أرد عليك بصوت Gemini...':continuousVoice?'المحادثة الصوتية جاهزة':'جاهز'}</div>
       <div className="chat-messages">
-        {!messages.length&&<div className="chat-empty">تكلم معي طبيعي. بعد ما تخلص كلامك راح أرد عليك وأكمل معك نفس سياق المحادثة.</div>}
+        {!messages.length&&<div className="chat-empty">تكلم معي طبيعي. بعد ما تخلص كلامك راح أرد عليك بصوت أنثوي وأكمل معك نفس سياق المحادثة.</div>}
         {messages.map((m,i)=><div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
         {loading&&<div className="bubble assistant typing">قاعد أفكر...</div>}
       </div>
