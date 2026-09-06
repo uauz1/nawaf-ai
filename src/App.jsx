@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Settings, ChevronLeft } from 'lucide-react';
+import { Search, Settings, ChevronLeft, X, Save, Send, RotateCcw } from 'lucide-react';
 
 const actions = [
-  { emoji: '💡', title: 'أفكار جديدة', sub: 'اقتراحات تناسبك' },
-  { emoji: '⚡', title: 'حل مشكلة', sub: 'تحليل سريع وواضح' },
-  { emoji: '📋', title: 'خطط ومشاريع', sub: 'رتب يومك ومشاريعك' },
-  { emoji: '⌨️', title: 'مساعدة برمجية', sub: 'كود وحلول تقنية' },
+  { id:'ideas', emoji: '💡', title: 'أفكار جديدة', sub: 'اقتراحات تناسبك', prompt:'اكتب لي 5 أفكار جديدة ومناسبة لي' },
+  { id:'solve', emoji: '⚡', title: 'حل مشكلة', sub: 'تحليل سريع وواضح', prompt:'ساعدني أحل المشكلة التالية:' },
+  { id:'plans', emoji: '📋', title: 'خطط ومشاريع', sub: 'رتب يومك ومشاريعك', prompt:'رتب لي خطة واضحة للمشروع التالي:' },
+  { id:'code', emoji: '⌨️', title: 'مساعدة برمجية', sub: 'كود وحلول تقنية', prompt:'ساعدني في الكود التالي:' },
 ];
 
 const mascotModes = [
@@ -21,16 +21,68 @@ function pickNext(currentId) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+function SettingsModal({settings,setSettings,onClose}){
+  const toggle=(key)=>setSettings(s=>({...s,[key]:!s[key]}));
+  return <div className="modal-backdrop" onClick={onClose}>
+    <section className="sheet settings-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-head"><div><small>Nawaf AI</small><h3>الإعدادات</h3></div><button onClick={onClose}><X/></button></div>
+      <div className="settings-list">
+        <button onClick={()=>toggle('rain')}><span><b>تأثير المطر</b><small>إظهار المطر فوق الخلفية</small></span><i className={settings.rain?'switch on':'switch'}><em/></i></button>
+        <button onClick={()=>toggle('autoMascot')}><span><b>حركة الشخصية تلقائيًا</b><small>تتغير حالتها كل 8 ثواني</small></span><i className={settings.autoMascot?'switch on':'switch'}><em/></i></button>
+        <button onClick={()=>toggle('motion')}><span><b>الحركات والأنيميشن</b><small>تفعيل الحركات الخفيفة</small></span><i className={settings.motion?'switch on':'switch'}><em/></i></button>
+        <button onClick={()=>toggle('darkOverlay')}><span><b>تعتيم الخلفية</b><small>يزيد وضوح النص والبطاقات</small></span><i className={settings.darkOverlay?'switch on':'switch'}><em/></i></button>
+      </div>
+      <div className="sheet-actions"><button className="secondary" onClick={()=>setSettings({rain:true,autoMascot:true,motion:true,darkOverlay:true})}><RotateCcw size={18}/>افتراضي</button><button className="primary" onClick={onClose}><Save size={18}/>حفظ</button></div>
+    </section>
+  </div>
+}
+
+function ActionSheet({action,onClose}){
+  const [value,setValue]=useState(action?.prompt||'');
+  const [answer,setAnswer]=useState('');
+  if(!action) return null;
+  const run=()=>setAnswer(`تم تجهيز الطلب: ${value || action.title}\n\nهذه نسخة تشغيل واجهة حالية، وربط الذكاء الفعلي بنضيفه في المرحلة التالية.`);
+  return <div className="modal-backdrop" onClick={onClose}>
+    <section className="sheet action-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-head"><div><small>{action.emoji}</small><h3>{action.title}</h3></div><button onClick={onClose}><X/></button></div>
+      <textarea value={value} onChange={e=>setValue(e.target.value)} placeholder="اكتب طلبك هنا..." />
+      <button className="run-btn" onClick={run}><Send size={18}/>ابدأ</button>
+      {answer&&<div className="demo-answer">{answer}</div>}
+    </section>
+  </div>
+}
+
+function ProjectSheet({project,onClose}){
+  if(!project) return null;
+  return <div className="modal-backdrop" onClick={onClose}>
+    <section className="sheet project-sheet" onClick={e=>e.stopPropagation()}>
+      <div className="sheet-head"><div><small>مشروع</small><h3>{project.name}</h3></div><button onClick={onClose}><X/></button></div>
+      <div className={`big-project-logo ${project.color}`}>{project.letter}</div>
+      <p>{project.desc}</p>
+      <div className="project-status"><span>الحالة</span><b>قيد التطوير</b></div>
+      <button className="run-btn" onClick={onClose}>رجوع للرئيسية</button>
+    </section>
+  </div>
+}
+
 export default function App() {
   const [mascotMode, setMascotMode] = useState(mascotModes[0]);
   const [reaction, setReaction] = useState('');
+  const [settingsOpen,setSettingsOpen]=useState(false);
+  const [activeAction,setActiveAction]=useState(null);
+  const [project,setProject]=useState(null);
+  const [search,setSearch]=useState('');
+  const [settings,setSettings]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem('nawaf-settings'))||{rain:true,autoMascot:true,motion:true,darkOverlay:true}}catch{return {rain:true,autoMascot:true,motion:true,darkOverlay:true}}
+  });
+
+  useEffect(()=>{localStorage.setItem('nawaf-settings',JSON.stringify(settings))},[settings]);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setMascotMode((current) => pickNext(current.id));
-    }, 8000);
+    if(!settings.autoMascot) return;
+    const timer = setInterval(() => setMascotMode((current) => pickNext(current.id)), 8000);
     return () => clearInterval(timer);
-  }, []);
+  }, [settings.autoMascot]);
 
   const interactMascot = () => {
     const reactions = ['👋', '😂', '✨', '🤨', '😎', '💡'];
@@ -40,26 +92,34 @@ export default function App() {
   };
 
   const greeting = useMemo(() => new Date().getHours() < 12 ? 'صباح الخير يا نواف ☀️' : 'مساء الخير يا نواف 🌙', []);
+  const projectData={
+    mueen:{name:'مُعين',letter:'م',color:'green',desc:'تطبيق إسلامي شامل: قرآن، صلاة، أذكار، قبلة ومزايا أخرى.'},
+    qadha:{name:'قدّها',letter:'ق',color:'purple',desc:'منصة ألعاب جماعية للمنافسات والتحديات بين الأصدقاء.'}
+  };
+  const normalized=search.trim().toLowerCase();
+  const matches=normalized?[...actions.filter(a=>(a.title+a.sub).toLowerCase().includes(normalized)),...(normalized.includes('معين')||normalized.includes('مُعين')?[{id:'mueen',title:'مُعين',sub:'مشروع'}]:[]),...(normalized.includes('قد')?[{id:'qadha',title:'قدّها',sub:'مشروع'}]:[])]:[];
 
   return (
-    <div className="page" dir="rtl">
+    <div className={`page ${settings.motion?'motion-on':'motion-off'} ${settings.darkOverlay?'overlay-on':'overlay-off'}`} dir="rtl">
       <div className="backdrop-photo" />
       <div className="page-overlay" />
-      <div className="rain-layer" />
+      {settings.rain&&<div className="rain-layer" />}
 
       <main className="mobile-shell">
         <header className="top-search">
           <div className="search-box">
             <Search size={24} />
-            <input placeholder="ابحث في مشاريعك وملاحظاتك..." />
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ابحث في مشاريعك وملاحظاتك..." />
           </div>
-          <button className="settings-btn" aria-label="الإعدادات"><Settings size={24}/></button>
+          <button className="settings-btn" aria-label="الإعدادات" onClick={()=>setSettingsOpen(true)}><Settings size={24}/></button>
         </header>
+
+        {normalized&&<div className="search-results">{matches.length?matches.map(item=><button key={item.id} onClick={()=>item.id==='mueen'||item.id==='qadha'?setProject(projectData[item.id]):setActiveAction(actions.find(a=>a.id===item.id))}><b>{item.title}</b><span>{item.sub}</span></button>):<div>ما لقيت نتيجة مطابقة</div>}</div>}
 
         <section className="hero-card">
           <div className="hero-bg" />
           <div className="hero-shade" />
-          <div className="change-pill">يتغير كل 8 ثواني</div>
+          <div className="change-pill">{settings.autoMascot?'يتغير كل 8 ثواني':'الحركة التلقائية متوقفة'}</div>
           <div className="hero-copy">
             <div className="greeting">{greeting}</div>
             <h1>كيف أقدر أساعدك اليوم؟</h1>
@@ -74,11 +134,11 @@ export default function App() {
         </section>
 
         <section className="action-grid">
-          {actions.map(({emoji,title,sub}) => (
-            <button key={title} className="action-card">
-              <span className="action-emoji">{emoji}</span>
-              <strong>{title}</strong>
-              <span className="action-sub">{sub}</span>
+          {actions.map((action) => (
+            <button key={action.id} className="action-card" onClick={()=>setActiveAction(action)}>
+              <span className="action-emoji">{action.emoji}</span>
+              <strong>{action.title}</strong>
+              <span className="action-sub">{action.sub}</span>
             </button>
           ))}
         </section>
@@ -89,24 +149,25 @@ export default function App() {
             <article className="project-card">
               <div className="project-logo green">م</div>
               <div className="project-info"><strong>مُعين</strong><span>تطبيق<br/>إسلامي<br/>شامل</span></div>
-              <button>راجع<br/>المشروع</button>
+              <button onClick={()=>setProject(projectData.mueen)}>راجع<br/>المشروع</button>
             </article>
             <article className="project-card">
               <div className="project-logo purple">ق</div>
               <div className="project-info"><strong>قدّها</strong><span>منصة<br/>ألعاب<br/>جماعية</span></div>
-              <button>راجع<br/>المشروع</button>
+              <button onClick={()=>setProject(projectData.qadha)}>راجع<br/>المشروع</button>
             </article>
           </div>
         </section>
 
         <section className="help-card">
-          <div>
-            <h3>كيف أقدر أساعدك الآن؟</h3>
-            <p>اكتب اللي في بالك وأنا أرتبه معك خطوة بخطوة.</p>
-          </div>
-          <button><ChevronLeft/></button>
+          <div><h3>كيف أقدر أساعدك الآن؟</h3><p>اكتب اللي في بالك وأنا أرتبه معك خطوة بخطوة.</p></div>
+          <button onClick={()=>setActiveAction({id:'ask',emoji:'💬',title:'اسأل Nawaf AI',sub:'ابدأ طلب جديد',prompt:''})}><ChevronLeft/></button>
         </section>
       </main>
+
+      {settingsOpen&&<SettingsModal settings={settings} setSettings={setSettings} onClose={()=>setSettingsOpen(false)}/>} 
+      {activeAction&&<ActionSheet action={activeAction} onClose={()=>setActiveAction(null)}/>} 
+      {project&&<ProjectSheet project={project} onClose={()=>setProject(null)}/>} 
     </div>
   );
 }
