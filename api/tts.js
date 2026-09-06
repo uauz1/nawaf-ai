@@ -37,14 +37,19 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
 
-  const prompt = `اقرئي النص التالي بصوت أنثوي سعودي شاب وطبيعي وواضح. الأسلوب ودي وتفاعلي وكأنك تتكلمين مع نواف مباشرة. استخدمي نبرة سعودية خفيفة ومفهومة، سرعة طبيعية مائلة للسرعة، بدون فصحى ثقيلة وبدون تمثيل مبالغ فيه. لا تضيفي أي كلمات غير موجودة في النص.\n\nالنص:\n${text.slice(0, 5000)}`;
+  // Short prompt + limited chunk size keeps the same Aoede voice but reduces generation latency.
+  const speechText = String(text).replace(/\[IMAGE_REQUEST\]/g, '').trim().slice(0, 1800);
+  const prompt = `اقرئي هذا النص فقط بصوت Aoede العربي الطبيعي، نبرة سعودية خفيفة وودية، بسرعة مائلة للسرعة، بدون إضافة أي كلام:\n${speechText}`;
 
   let lastError;
   for (const model of MODELS) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           generationConfig: {
@@ -56,6 +61,7 @@ export default async function handler(req, res) {
           }
         })
       });
+      clearTimeout(timeout);
       const data = await response.json();
       if (!response.ok) {
         lastError = data?.error?.message || `TTS failed (${response.status})`;
@@ -79,7 +85,7 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model });
     } catch (error) {
-      lastError = error?.message || 'TTS request failed';
+      lastError = error?.name === 'AbortError' ? 'TTS timeout' : (error?.message || 'TTS request failed');
     }
   }
 
