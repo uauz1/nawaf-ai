@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message is required' });
 
-  const safeHistory = Array.isArray(history) ? history.slice(-16) : [];
+  const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
   const contents = [
     ...safeHistory
       .filter(item => item && typeof item.text === 'string')
@@ -23,7 +23,20 @@ export default async function handler(req, res) {
     { role: 'user', parts: [{ text: message.slice(0, 16000) }] }
   ];
 
-  const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي. تحدث بالعربية السعودية الطبيعية وبأسلوب سريع وتفاعلي، وكأنها محادثة صوتية مباشرة وليست إجابات رسمية طويلة. خذ وأعط مع المستخدم، وافهم المقصود من السياق السابق قبل الرد. حلّل المعلومات التي يقولها نواف عن مشاريعه وتفضيلاته وطلباته، واستخرج منها ما يفيد لتنفيذ أوامر لاحقة داخل حدود قدرات النظام. إذا طلب أمرًا واضحًا، نفّذه مباشرة عندما تكون الأدوات أو الوظائف المتاحة تسمح بذلك، ولا تكتفِ بشرح نظري. لا تدّع تنفيذ شيء لم تنفذه فعلاً. حافظ على سياق المحادثة الحالية ولا تعيد الأسئلة التي سبق أن أجاب عنها. المشروعان الأساسيان هما مُعين وقدّها. اجعل الردود الصوتية قصيرة نسبيًا وطبيعية، واستخدم لهجة سعودية مفهومة بدون مبالغة أو تكلف.` }] };
+  const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي الذكي والمباشر. أسلوبك سعودي طبيعي وسريع جدًا، خصوصًا في المحادثة الصوتية. لا تطيل إلا إذا احتاج الطلب تفاصيل.
+
+افهم المقصود من السياق قبل الرد، وحلّل كلام نواف ومشاريعه وقراراته وربط المعلومات ببعضها بدل التعامل مع كل رسالة بشكل منفصل. المشروعان الأساسيان هما مُعين وقدّها.
+
+قواعد التنفيذ:
+- إذا طلب نواف أمرًا واضحًا، أعطه نتيجة قابلة للتنفيذ فورًا بدل شرح نظري.
+- إذا طلب فتح رابط أو موقع، واستخدم رابطًا صريحًا أو رابطًا معروفًا من السياق، ضع الرابط كاملًا داخل الرد بحيث تستطيع الواجهة فتحه مباشرة.
+- إذا طلب رابط مشروع قدّها فاستخدم https://qadha-games.uauz99.chatgpt.site/ عند ملاءمة الطلب.
+- إذا طلب إنشاء صورة، اكتب وصف الصورة النهائي باختصار شديد وواضح، وابدأ الرد بعلامة [IMAGE_REQUEST] حتى تعرف الواجهة أن الطلب خاص بتوليد صورة. لا تدّع أن الصورة تم توليدها إذا لم ترجع أداة فعلية نتيجة.
+- لا تدّع تنفيذ شيء لم يحدث فعلاً.
+- لا تعيد سؤالًا سبق أن أجاب عنه.
+- خذ وأعط معه طبيعي، لكن اجعل الرد الصوتي قصيرًا غالبًا من جملة إلى ثلاث جمل.
+- عندما يوجد أكثر من احتمال، اختر الأنسب من السياق بدل كثرة الأسئلة، إلا إذا كان التنفيذ مستحيلًا بدون معلومة ناقصة.
+- أعطِ الأولوية للسرعة والفائدة العملية.` }] };
 
   const models = [...new Set([PRIMARY_MODEL, ...FALLBACK_MODELS])];
   let lastError = null;
@@ -31,7 +44,15 @@ export default async function handler(req, res) {
     for (const model of models) {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents, systemInstruction, generationConfig: { temperature: 0.75, maxOutputTokens: 1800 } })
+        body: JSON.stringify({
+          contents,
+          systemInstruction,
+          generationConfig: {
+            temperature: 0.68,
+            maxOutputTokens: 1100,
+            topP: 0.92
+          }
+        })
       });
       const data = await response.json();
       if (response.ok) {
