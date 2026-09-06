@@ -1,5 +1,5 @@
-const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const FALLBACK_MODELS = ['gemini-2.5-flash-lite'];
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const FALLBACK_MODELS = [];
 
 function getRiyadhNow() {
   const now = new Date();
@@ -54,7 +54,6 @@ export default async function handler(req, res) {
     : process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
 
-  // Keep only the recent useful context. This cuts request size and improves voice latency.
   const rawHistory = Array.isArray(history) ? history.slice(-10) : [];
   const safeHistory = rawHistory.filter((item, index) => {
     if (!item || typeof item.text !== 'string') return false;
@@ -110,8 +109,6 @@ export default async function handler(req, res) {
       }
       const errorMessage = data?.error?.message || 'Gemini request failed';
       lastError = { status: response.status, message: errorMessage };
-      const temporary = response.status === 429 || response.status === 503 || /high demand|overloaded|capacity|temporar/i.test(errorMessage);
-      if (temporary) continue;
       return res.status(response.status).json({ error: errorMessage, code: 'GEMINI_ERROR' });
     }
     return res.status(lastError?.status || 503).json({ error: 'الذكاء عليه ضغط مؤقت حاليًا. جرّب مرة ثانية بعد قليل.', code: 'GEMINI_BUSY' });
