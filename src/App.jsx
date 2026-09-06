@@ -1,19 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Settings, Lightbulb, Zap, ClipboardList, Keyboard, ChevronLeft } from 'lucide-react';
+import { Search, Settings, ChevronLeft } from 'lucide-react';
 
 const actions = [
-  { icon: Lightbulb, title: 'أفكار جديدة', sub: 'اقتراحات تناسبك' },
-  { icon: Zap, title: 'حل مشكلة', sub: 'تحليل سريع وواضح' },
-  { icon: ClipboardList, title: 'خطط ومشاريع', sub: 'رتب يومك ومشاريعك' },
-  { icon: Keyboard, title: 'مساعدة برمجية', sub: 'كود وحلول تقنية' },
+  { emoji: '💡', title: 'أفكار جديدة', sub: 'اقتراحات تناسبك' },
+  { emoji: '⚡', title: 'حل مشكلة', sub: 'تحليل سريع وواضح' },
+  { emoji: '📋', title: 'خطط ومشاريع', sub: 'رتب يومك ومشاريعك' },
+  { emoji: '⌨️', title: 'مساعدة برمجية', sub: 'كود وحلول تقنية' },
 ];
 
 const mascotModes = [
-  { id: 'idle', emoji: '🙂', label: 'يراقبك' },
-  { id: 'wave', emoji: '👋', label: 'يسلم عليك' },
-  { id: 'think', emoji: '🤔', label: 'يفكر' },
-  { id: 'happy', emoji: '😄', label: 'متحمس' },
-  { id: 'sleepy', emoji: '😴', label: 'نعسان' },
+  { id: 'idle', emoji: '😅' },
+  { id: 'wave', emoji: '👋' },
+  { id: 'think', emoji: '🤔' },
+  { id: 'happy', emoji: '😄' },
+  { id: 'sleepy', emoji: '😴' },
 ];
 
 function pickNext(currentId) {
@@ -33,7 +33,7 @@ export default function App() {
   }, []);
 
   const interactMascot = () => {
-    const reactions = ['👋','😂','✨','🤨','😎','💡'];
+    const reactions = ['👋', '😂', '✨', '🤨', '😎', '💡'];
     setReaction(reactions[Math.floor(Math.random() * reactions.length)]);
     setMascotMode((current) => pickNext(current.id));
     window.setTimeout(() => setReaction(''), 1300);
@@ -45,6 +45,7 @@ export default function App() {
     <div className="page" dir="rtl">
       <div className="backdrop-photo" />
       <div className="page-overlay" />
+      <div className="rain-layer" />
 
       <main className="mobile-shell">
         <header className="top-search">
@@ -65,25 +66,19 @@ export default function App() {
             <p>الأحد، ٢٤ ربيع الأول، ١٤٤٨ هـ</p>
           </div>
 
-          <button
-            className={`mascot-placeholder mascot-${mascotMode.id}`}
-            onClick={interactMascot}
-            aria-label={`الشخصية: ${mascotMode.label}`}
-            title="اضغط على الشخصية"
-          >
+          <button className={`mascot-placeholder mascot-${mascotMode.id}`} onClick={interactMascot} aria-label="التفاعل مع الشخصية">
             <div className="reaction">{reaction || mascotMode.emoji}</div>
             <div className="boy-head"><span/></div>
             <div className="boy-body"><i/></div>
-            <span className="mascot-status">{mascotMode.label}</span>
           </button>
         </section>
 
         <section className="action-grid">
-          {actions.map(({icon:Icon,title,sub}) => (
+          {actions.map(({emoji,title,sub}) => (
             <button key={title} className="action-card">
-              <Icon size={28}/>
+              <span className="action-emoji">{emoji}</span>
               <strong>{title}</strong>
-              <span>{sub}</span>
+              <span className="action-sub">{sub}</span>
             </button>
           ))}
         </section>
@@ -93,12 +88,12 @@ export default function App() {
           <div className="projects-grid">
             <article className="project-card">
               <div className="project-logo green">م</div>
-              <div className="project-info"><strong>مُعين</strong><span>تطبيق إسلامي شامل</span></div>
+              <div className="project-info"><strong>مُعين</strong><span>تطبيق<br/>إسلامي<br/>شامل</span></div>
               <button>راجع<br/>المشروع</button>
             </article>
             <article className="project-card">
               <div className="project-logo purple">ق</div>
-              <div className="project-info"><strong>قدّها</strong><span>منصة ألعاب جماعية</span></div>
+              <div className="project-info"><strong>قدّها</strong><span>منصة<br/>ألعاب<br/>جماعية</span></div>
               <button>راجع<br/>المشروع</button>
             </article>
           </div>
