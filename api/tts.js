@@ -1,4 +1,4 @@
-const MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'];
+const MODELS = ['gemini-2.5-flash-preview-tts', 'gemini-3.1-flash-tts-preview'];
 
 function pcm16ToWavBase64(pcmBase64, sampleRate = 24000) {
   const pcm = Buffer.from(pcmBase64, 'base64');
@@ -59,7 +59,7 @@ export default async function handler(req, res) {
       const data = await response.json();
       if (!response.ok) {
         lastError = data?.error?.message || `TTS failed (${response.status})`;
-        if (response.status === 429 || response.status === 503) continue;
+        if (response.status === 429 || response.status === 503 || response.status === 404) continue;
         return res.status(response.status).json({ error: lastError, code: 'TTS_ERROR' });
       }
 
@@ -76,6 +76,7 @@ export default async function handler(req, res) {
         ? part.inlineData.data
         : pcm16ToWavBase64(part.inlineData.data, sampleRate);
 
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model });
     } catch (error) {
       lastError = error?.message || 'TTS request failed';
