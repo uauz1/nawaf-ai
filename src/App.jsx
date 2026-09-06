@@ -1,386 +1,606 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Settings, ChevronLeft, X, Save, Send, RotateCcw, Mic, MicOff, VolumeX, ExternalLink, LayoutDashboard } from 'lucide-react';
+import {
+  Bot, Brain, ExternalLink, Gauge, Github, Mic, MicOff, Moon, MoreHorizontal,
+  RotateCcw, Search, Send, Settings, Sparkles, Volume2, VolumeX, X, Zap
+} from 'lucide-react';
 
-const actions = [
-  { id:'ideas', emoji:'💡', title:'أفكار جديدة', sub:'اقتراحات تناسبك', prompt:'اكتب لي 5 أفكار جديدة ومناسبة لي' },
-  { id:'solve', emoji:'⚡', title:'حل مشكلة', sub:'تحليل سريع وواضح', prompt:'ساعدني أحل المشكلة التالية:' },
-  { id:'plans', emoji:'📋', title:'خطط ومشاريع', sub:'رتب يومك ومشاريعك', prompt:'رتب لي خطة واضحة للمشروع التالي:' },
-  { id:'code', emoji:'⌨️', title:'مساعدة برمجية', sub:'كود وحلول تقنية', prompt:'ساعدني في الكود التالي:' },
+const QUICK_ACTIONS = [
+  { id: 'ideas', icon: Sparkles, title: 'أفكار', prompt: 'أعطني 5 أفكار مناسبة لي بشكل مختصر وواضح.' },
+  { id: 'solve', icon: Zap, title: 'حل مشكلة', prompt: 'ساعدني أحل المشكلة التالية بأسرع طريقة عملية: ' },
+  { id: 'plan', icon: Brain, title: 'خطط', prompt: 'رتب لي خطة تنفيذ واضحة للمهمة التالية: ' },
+  { id: 'code', icon: Gauge, title: 'برمجة', prompt: 'ساعدني في هذا الكود أو المشكلة التقنية: ' }
 ];
 
-const projectData = {
-  mueen:{
-    id:'mueen', name:'مُعين', letter:'م', color:'green',
-    desc:'تطبيق إسلامي شامل: قرآن، صلاة، أذكار، قبلة ومزايا أخرى.',
-    repo:'https://github.com/uauz1/mueen-islamic-app',
-    stats:[['المنصة','Android / Web'],['الحالة','قيد التطوير'],['الأولوية','إصلاحات ما قبل النشر']]
+const PROJECTS = {
+  mueen: {
+    name: 'مُعين',
+    letter: 'م',
+    desc: 'القرآن، الصلاة، الأذكار، القبلة وتجربة إسلامية متكاملة.',
+    repo: 'https://github.com/uauz1/mueen-islamic-app'
   },
-  qadha:{
-    id:'qadha', name:'قدّها', letter:'ق', color:'purple',
-    desc:'منصة ألعاب جماعية للمنافسات والتحديات بين الأصدقاء.',
-    repo:'https://github.com/uauz1/game',
-    app:'https://qadha-games.uauz99.chatgpt.site/',
-    stats:[['المنصة','Web'],['الحالة','قيد التطوير'],['الأولوية','إكمال الألعاب وتشغيلها']]
+  qadha: {
+    name: 'قدّها',
+    letter: 'ق',
+    desc: 'منصة ألعاب جماعية وتحديات بين الأصدقاء.',
+    repo: 'https://github.com/uauz1/game',
+    app: 'https://qadha-games.uauz99.chatgpt.site/'
   }
 };
 
-let activeAudio = null;
-let audioGeneration = 0;
+const isIOS = () => {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/i.test(navigator.userAgent || '') ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
 
-function stopAllSpeech() {
-  audioGeneration += 1;
-  if (activeAudio) {
-    activeAudio.pause();
-    activeAudio.src = '';
-    activeAudio = null;
-  }
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+let activeAudio = null;
+let speechGeneration = 0;
+
+function stopSpeech() {
+  speechGeneration += 1;
+  try {
+    if (activeAudio) {
+      activeAudio.pause?.();
+      activeAudio.src = '';
+    }
+  } catch (_) {}
+  activeAudio = null;
+  try { window.speechSynthesis?.cancel?.(); } catch (_) {}
 }
 
-function pickSaudiFemaleVoice() {
-  if (!('speechSynthesis' in window)) return null;
+function pickArabicVoice() {
+  if (!window.speechSynthesis) return null;
   const voices = window.speechSynthesis.getVoices();
   const arabic = voices.filter(v => /^ar([_-]|$)/i.test(v.lang));
   const saudi = arabic.filter(v => /ar[-_]SA/i.test(v.lang));
-  const femaleHints = /zariyah|hala|laila|layla|mariam|maryam|sara|salma|female|أنثى/i;
-  return saudi.find(v => femaleHints.test(v.name)) || arabic.find(v => femaleHints.test(v.name)) || saudi[0] || arabic[0] || null;
+  const female = /zariyah|hala|layla|laila|mariam|maryam|salma|sara|female/i;
+  return saudi.find(v => female.test(v.name)) || arabic.find(v => female.test(v.name)) || saudi[0] || arabic[0] || null;
 }
 
-function speakDeviceFallback(text, onEnd) {
-  if (!text || !('speechSynthesis' in window)) { onEnd?.(); return false; }
-  const u = new SpeechSynthesisUtterance(text);
+function speakInstant(text, onEnd) {
+  const cleaned = String(text || '').replace(/^\[IMAGE_REQUEST\]\s*/i, '').trim();
+  if (!cleaned || !window.speechSynthesis) {
+    onEnd?.();
+    return false;
+  }
+  stopSpeech();
+  const generation = speechGeneration;
+  const u = new SpeechSynthesisUtterance(cleaned);
   u.lang = 'ar-SA';
-  u.rate = 1.08;
-  u.pitch = 1.1;
+  u.rate = isIOS() ? 1.13 : 1.08;
+  u.pitch = 1.02;
   u.volume = 1;
-  const voice = pickSaudiFemaleVoice();
+  const voice = pickArabicVoice();
   if (voice) u.voice = voice;
-  u.onend = () => onEnd?.();
-  u.onerror = () => onEnd?.();
+  u.onend = () => generation === speechGeneration && onEnd?.();
+  u.onerror = () => generation === speechGeneration && onEnd?.();
   window.speechSynthesis.speak(u);
   return true;
 }
 
-async function fetchGeminiAudio(text, apiKey) {
+async function fetchNaturalAudio(text, apiKey, signal) {
   const response = await fetch('/api/tts', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ text, apiKey:apiKey?.trim() || undefined })
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ text: String(text || '').slice(0, 1800), apiKey: apiKey?.trim() || undefined })
   });
   const data = await response.json();
   if (!response.ok || !data?.audioBase64) throw new Error(data?.error || 'تعذر توليد الصوت');
   return data;
 }
 
-function splitForFastSpeech(text) {
-  const cleaned = String(text || '').replace(/\[IMAGE_REQUEST\]/g,'').trim();
-  if (!cleaned) return [];
-  const words = cleaned.split(/\s+/);
-  if (words.length <= 10) return [cleaned];
-  const first = words.slice(0,10).join(' ');
-  const rest = words.slice(10).join(' ');
-  return [first, rest].filter(Boolean);
-}
+async function speakNaturalFast(text, apiKey, onEnd) {
+  const cleaned = String(text || '').replace(/^\[IMAGE_REQUEST\]\s*/i, '').trim();
+  if (!cleaned) return onEnd?.();
+  stopSpeech();
+  const generation = speechGeneration;
+  const controller = new AbortController();
+  const fallbackTimer = setTimeout(() => {
+    try { controller.abort(); } catch (_) {}
+    if (generation === speechGeneration) speakInstant(cleaned, onEnd);
+  }, 1350);
 
-async function speakGeminiSaudiFast(text, apiKey, onEnd, onFallback) {
-  if (!text) { onEnd?.(); return; }
-  stopAllSpeech();
-  const generation = audioGeneration;
-  const parts = splitForFastSpeech(text);
-  if (!parts.length) { onEnd?.(); return; }
   try {
-    const firstPromise = fetchGeminiAudio(parts[0], apiKey);
-    const restPromise = parts[1] ? fetchGeminiAudio(parts[1], apiKey).catch(()=>null) : Promise.resolve(null);
-    const first = await firstPromise;
-    if (generation !== audioGeneration) return;
-
-    const playData = data => new Promise((resolve, reject) => {
-      if (!data || generation !== audioGeneration) return resolve();
-      const audio = new Audio(`data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`);
-      activeAudio = audio;
-      audio.preload = 'auto';
-      audio.onended = () => { if (activeAudio === audio) activeAudio = null; resolve(); };
-      audio.onerror = () => { if (activeAudio === audio) activeAudio = null; reject(new Error('audio playback failed')); };
-      audio.play().catch(reject);
-    });
-
-    await playData(first);
-    const rest = await restPromise;
-    if (rest && generation === audioGeneration) await playData(rest);
-    if (generation === audioGeneration) onEnd?.();
+    const data = await fetchNaturalAudio(cleaned, apiKey, controller.signal);
+    clearTimeout(fallbackTimer);
+    if (generation !== speechGeneration) return;
+    const audio = new Audio(`data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`);
+    activeAudio = audio;
+    audio.onended = () => {
+      if (activeAudio === audio) activeAudio = null;
+      if (generation === speechGeneration) onEnd?.();
+    };
+    audio.onerror = () => {
+      if (activeAudio === audio) activeAudio = null;
+      if (generation === speechGeneration) speakInstant(cleaned, onEnd);
+    };
+    await audio.play();
   } catch (error) {
-    if (generation !== audioGeneration) return;
-    onFallback?.(error);
+    clearTimeout(fallbackTimer);
+    if (error?.name !== 'AbortError' && generation === speechGeneration) speakInstant(cleaned, onEnd);
   }
 }
 
 function extractUrl(text) {
   const match = String(text || '').match(/https?:\/\/[^\s)\]}>,]+/i);
-  return match ? match[0].replace(/[.,،؛]+$/,'') : '';
+  return match ? match[0].replace(/[.,،؛]+$/, '') : '';
 }
 
-function maybeDirectOpen(message, reply) {
-  const wantsOpen = /(افتح|فتح|ودني|روح|الرابط|لينك)/i.test(message || '');
-  if (!wantsOpen) return false;
-  let url = extractUrl(message) || extractUrl(reply);
-  if (!url && /(قد.?ها|قدها)/i.test(message || '')) url = projectData.qadha.app;
-  if (!url && /(مُ?عين|معين)/i.test(message || '')) url = projectData.mueen.repo;
-  if (!url) return false;
-  window.open(url, '_blank', 'noopener,noreferrer');
-  return true;
+function getLocalDateTimeReply(message) {
+  const text = String(message || '').trim();
+  const asksDate = /(تاريخ اليوم|وش اليوم|اي يوم|أي يوم|اليوم كم)/i.test(text);
+  const asksTime = /(كم الساعة|وش الوقت|الوقت الحين|الساعة كم)/i.test(text);
+  if (!asksDate && !asksTime) return '';
+  const now = new Date();
+  const date = new Intl.DateTimeFormat('ar-SA-u-ca-gregory', {
+    timeZone: 'Asia/Riyadh', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  }).format(now);
+  const time = new Intl.DateTimeFormat('ar-SA', {
+    timeZone: 'Asia/Riyadh', hour: 'numeric', minute: '2-digit', hour12: true
+  }).format(now);
+  if (asksDate && asksTime) return `اليوم ${date}، والوقت الآن ${time} بتوقيت الرياض.`;
+  if (asksDate) return `اليوم ${date}.`;
+  return `الوقت الآن ${time} بتوقيت الرياض.`;
 }
 
-function SettingsModal({ settings, setSettings, onClose }) {
-  const toggle = key => setSettings(s => ({...s,[key]:!s[key]}));
-  const hasKey = Boolean(settings.geminiApiKey?.trim());
-  return <div className="modal-backdrop" onClick={onClose}>
-    <section className="sheet settings-sheet" onClick={e=>e.stopPropagation()}>
-      <div className="sheet-head"><div><small>Nawaf AI</small><h3>الإعدادات</h3></div><button onClick={onClose}><X/></button></div>
-      <div className="api-key-card">
-        <div className="api-key-head"><div><b>Gemini API Key</b><small>مفتاح الذكاء الاصطناعي والصوت الاحترافي</small></div><span className={hasKey?'key-status ready':'key-status'}>{hasKey?'مضاف':'غير مضاف'}</span></div>
-        <input type="password" value={settings.geminiApiKey||''} onChange={e=>setSettings(s=>({...s,geminiApiKey:e.target.value}))} placeholder="AIza..." dir="ltr" autoComplete="off"/>
-      </div>
-      <div className="settings-list">
-        <button onClick={()=>toggle('voiceReplies')}><span><b>الرد بالصوت</b><small>نفس صوت Gemini الحالي لكن يبدأ أسرع</small></span><i className={settings.voiceReplies?'switch on':'switch'}><em/></i></button>
-        <button onClick={()=>toggle('continuousVoice')}><span><b>محادثة صوتية مستمرة</b><small>يرد ثم يرجع يسمعك تلقائيًا بدون ضغط جديد</small></span><i className={settings.continuousVoice?'switch on':'switch'}><em/></i></button>
-        <button onClick={()=>toggle('rain')}><span><b>تأثير المطر</b><small>مطر أوضح وأنعم فوق الخلفية</small></span><i className={settings.rain?'switch on':'switch'}><em/></i></button>
-        <button onClick={()=>toggle('motion')}><span><b>الحركات والأنيميشن</b><small>تفعيل الحركات الخفيفة</small></span><i className={settings.motion?'switch on':'switch'}><em/></i></button>
-      </div>
-      <div className="sheet-actions"><button className="secondary" onClick={()=>setSettings(s=>({...s,voiceReplies:true,continuousVoice:true,rain:true,motion:true,darkOverlay:true}))}><RotateCcw size={18}/>افتراضي</button><button className="primary" onClick={onClose}><Save size={18}/>حفظ</button></div>
-    </section>
-  </div>
+function SettingsPanel({ settings, setSettings, onClose }) {
+  const toggle = key => setSettings(s => ({ ...s, [key]: !s[key] }));
+  const setMode = voiceMode => setSettings(s => ({ ...s, voiceMode }));
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="settings-panel" onClick={e => e.stopPropagation()}>
+        <div className="panel-head">
+          <div><small>Nawaf AI</small><h2>الإعدادات</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={22}/></button>
+        </div>
+
+        <div className="setting-block">
+          <div className="setting-title"><b>سرعة الصوت</b><span>اختيار الوضع الافتراضي</span></div>
+          <div className="segmented">
+            <button className={settings.voiceMode === 'instant' ? 'active' : ''} onClick={() => setMode('instant')}><Zap size={17}/>فوري</button>
+            <button className={settings.voiceMode === 'natural' ? 'active' : ''} onClick={() => setMode('natural')}><Volume2 size={17}/>طبيعي</button>
+          </div>
+          <p className="setting-note">الوضع الفوري هو الأسرع والأثبت على الآيفون. الطبيعي يحاول صوت Gemini ثم يتحول تلقائيًا للفوري إذا تأخر.</p>
+        </div>
+
+        <div className="setting-row" onClick={() => toggle('voiceReplies')}>
+          <div><b>الرد بالصوت</b><span>تشغيل الصوت تلقائيًا بعد كل رد</span></div>
+          <i className={settings.voiceReplies ? 'switch on' : 'switch'}><em/></i>
+        </div>
+        <div className="setting-row" onClick={() => toggle('continuousVoice')}>
+          <div><b>المحادثة المستمرة</b><span>يرد ثم يرجع يسمعك بدون ضغطة جديدة</span></div>
+          <i className={settings.continuousVoice ? 'switch on' : 'switch'}><em/></i>
+        </div>
+        <div className="setting-row" onClick={() => toggle('rain')}>
+          <div><b>تأثير المطر</b><span>حركة خلفية خفيفة</span></div>
+          <i className={settings.rain ? 'switch on' : 'switch'}><em/></i>
+        </div>
+        <div className="setting-row" onClick={() => toggle('motion')}>
+          <div><b>الحركات</b><span>أنيميشن خفيف للواجهة</span></div>
+          <i className={settings.motion ? 'switch on' : 'switch'}><em/></i>
+        </div>
+
+        <div className="setting-block api-box">
+          <div className="setting-title"><b>Gemini API Key</b><span>{settings.geminiApiKey?.trim() ? 'مضاف' : 'اختياري إذا كان موجود على Vercel'}</span></div>
+          <input
+            type="password"
+            dir="ltr"
+            autoComplete="off"
+            placeholder="AIza..."
+            value={settings.geminiApiKey || ''}
+            onChange={e => setSettings(s => ({ ...s, geminiApiKey: e.target.value }))}
+          />
+        </div>
+
+        <div className="panel-actions">
+          <button className="ghost-btn" onClick={() => setSettings({ voiceReplies: true, continuousVoice: true, voiceMode: 'instant', rain: true, motion: true, geminiApiKey: settings.geminiApiKey || '' })}><RotateCcw size={18}/>افتراضي</button>
+          <button className="primary-btn" onClick={onClose}>حفظ</button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
-function ConversationSheet({ action, onClose, apiKey, voiceReplies, continuousVoice }) {
-  const [value,setValue]=useState(action?.prompt||'');
-  const [messages,setMessages]=useState([]);
-  const [loading,setLoading]=useState(false);
-  const [listening,setListening]=useState(false);
-  const [speaking,setSpeaking]=useState(false);
-  const [error,setError]=useState('');
-  const recognitionRef=useRef(null);
-  const restartRef=useRef(false);
-  const retryTimerRef=useRef(null);
-  const loadingRef=useRef(false);
-  const speakingRef=useRef(false);
-  const messagesRef=useRef([]);
+function ProjectPanel({ project, onClose }) {
+  if (!project) return null;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="project-panel" onClick={e => e.stopPropagation()}>
+        <div className="panel-head">
+          <div><small>لوحة المشروع</small><h2>{project.name}</h2></div>
+          <button className="icon-btn" onClick={onClose}><X size={22}/></button>
+        </div>
+        <div className="project-hero">
+          <div className="project-avatar">{project.letter}</div>
+          <div><h3>{project.name}</h3><p>{project.desc}</p></div>
+        </div>
+        <div className="project-links">
+          {project.app && <button onClick={() => window.open(project.app, '_blank', 'noopener,noreferrer')}><ExternalLink size={20}/>فتح الموقع</button>}
+          <button onClick={() => window.open(project.repo, '_blank', 'noopener,noreferrer')}><Github size={20}/>فتح GitHub</button>
+        </div>
+      </section>
+    </div>
+  );
+}
 
-  useEffect(()=>{ loadingRef.current=loading; },[loading]);
-  useEffect(()=>{ speakingRef.current=speaking; },[speaking]);
-  useEffect(()=>{ messagesRef.current=messages; },[messages]);
+export default function App() {
+  const defaults = { voiceReplies: true, continuousVoice: true, voiceMode: 'instant', rain: true, motion: true, geminiApiKey: '' };
+  const [settings, setSettings] = useState(() => {
+    try { return { ...defaults, ...(JSON.parse(localStorage.getItem('nawaf-ai-settings')) || {}) }; }
+    catch { return defaults; }
+  });
+  const [messages, setMessages] = useState(() => [
+    { role: 'assistant', text: 'جاهز لك. تكلم مباشرة أو اكتب، وبرد عليك بأسرع شكل ممكن.' }
+  ]);
+  const [value, setValue] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [error, setError] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [project, setProject] = useState(null);
+  const [search, setSearch] = useState('');
 
-  const clearRetry=()=>{
-    if(retryTimerRef.current){clearTimeout(retryTimerRef.current);retryTimerRef.current=null;}
+  const messagesRef = useRef(messages);
+  const loadingRef = useRef(false);
+  const speakingRef = useRef(false);
+  const listeningRef = useRef(false);
+  const recognitionRef = useRef(null);
+  const restartWantedRef = useRef(false);
+  const restartTimerRef = useRef(null);
+  const utteranceRef = useRef('');
+  const scrollRef = useRef(null);
+
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { loadingRef.current = loading; }, [loading]);
+  useEffect(() => { speakingRef.current = speaking; }, [speaking]);
+  useEffect(() => { listeningRef.current = listening; }, [listening]);
+  useEffect(() => localStorage.setItem('nawaf-ai-settings', JSON.stringify(settings)), [settings]);
+  useEffect(() => { scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, loading]);
+  useEffect(() => {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
+  }, []);
+
+  const greeting = useMemo(() => {
+    const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Riyadh', hour: '2-digit', hour12: false }).format(new Date()));
+    return h < 12 ? 'صباح الخير يا نواف' : h < 18 ? 'مساء الخير يا نواف' : 'يا مساء الخير يا نواف';
+  }, []);
+
+  const status = listening ? 'أسمعك الآن…' : speaking ? 'قاعد أرد عليك…' : loading ? 'أجهز الرد…' : settings.continuousVoice && restartWantedRef.current ? 'جاهز أسمعك تلقائيًا' : 'جاهز';
+
+  const clearRestartTimer = () => {
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    restartTimerRef.current = null;
   };
 
-  const stopVoice=()=>{
-    restartRef.current=false;
-    clearRetry();
-    try{recognitionRef.current?.abort?.();}catch{}
-    recognitionRef.current=null;
-    stopAllSpeech();
-    setListening(false); setSpeaking(false);
+  const stopRecognition = (abort = true) => {
+    clearRestartTimer();
+    try {
+      if (abort) recognitionRef.current?.abort?.();
+      else recognitionRef.current?.stop?.();
+    } catch (_) {}
+    recognitionRef.current = null;
+    setListening(false);
+    listeningRef.current = false;
   };
 
-  useEffect(()=>()=>stopVoice(),[]);
-
-  const scheduleListeningRestart=(delay=220)=>{
-    clearRetry();
-    if(!continuousVoice||!restartRef.current||loadingRef.current||speakingRef.current)return;
-    retryTimerRef.current=setTimeout(()=>{
-      if(continuousVoice&&restartRef.current&&!loadingRef.current&&!speakingRef.current) beginListening(true);
-    },delay);
+  const stopEverything = () => {
+    restartWantedRef.current = false;
+    stopRecognition(true);
+    stopSpeech();
+    setSpeaking(false);
+    speakingRef.current = false;
   };
 
-  const beginListening=(automatic=false)=>{
-    const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!Recognition){
-      setError('المحادثة الصوتية غير مدعومة في هذا المتصفح. افتح الموقع من Safari أو Chrome واسمح للمايك.');
-      restartRef.current=false;
+  useEffect(() => () => stopEverything(), []);
+
+  const scheduleRestart = (delay = 320) => {
+    clearRestartTimer();
+    if (!settings.continuousVoice || !restartWantedRef.current || loadingRef.current || speakingRef.current) return;
+    restartTimerRef.current = setTimeout(() => {
+      if (settings.continuousVoice && restartWantedRef.current && !loadingRef.current && !speakingRef.current && !listeningRef.current) {
+        beginListening(true);
+      }
+    }, delay);
+  };
+
+  const finishSpeaking = () => {
+    setSpeaking(false);
+    speakingRef.current = false;
+    if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(360);
+  };
+
+  const speakReply = text => {
+    if (!settings.voiceReplies) {
+      if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(260);
       return;
     }
-    if(listening||loadingRef.current||speakingRef.current)return;
-    clearRetry();
-    stopAllSpeech();
-    try{recognitionRef.current?.abort?.();}catch{}
-
-    const r=new Recognition();
-    r.lang='ar-SA';
-    r.interimResults=true;
-    r.continuous=false;
-    r.maxAlternatives=1;
-    let finalText='';
-    let gotSpeech=false;
-    let hadFatalError=false;
-
-    r.onstart=()=>{
-      setListening(true);
-      setSpeaking(false);
-      setError('');
-      restartRef.current=true;
-    };
-    r.onspeechstart=()=>{gotSpeech=true;};
-    r.onresult=e=>{
-      let live='';
-      for(let i=e.resultIndex;i<e.results.length;i++){
-        const t=e.results[i][0].transcript;
-        if(e.results[i].isFinal) finalText+=t+' '; else live+=t;
-      }
-      if((finalText+live).trim())gotSpeech=true;
-      setValue((finalText+live).trim());
-    };
-    r.onerror=e=>{
-      setListening(false);
-      const code=e?.error;
-      if(code==='not-allowed'||code==='service-not-allowed'){
-        hadFatalError=true;
-        restartRef.current=false;
-        setError('اسمح للموقع باستخدام الميكروفون ثم جرّب مرة ثانية.');
-      }else if(code==='audio-capture'){
-        hadFatalError=true;
-        restartRef.current=false;
-        setError('تعذر الوصول للمايك. تأكد أن المتصفح مسموح له باستخدام الميكروفون.');
-      }
-    };
-    r.onend=()=>{
-      setListening(false);
-      if(recognitionRef.current===r)recognitionRef.current=null;
-      const text=finalText.trim();
-      if(text){
-        sendMessage(text,true);
-        return;
-      }
-      if(!hadFatalError&&restartRef.current&&continuousVoice){
-        scheduleListeningRestart(gotSpeech?180:(automatic?350:260));
-      }
-    };
-    recognitionRef.current=r;
-    restartRef.current=true;
-    try{r.start();}
-    catch(err){
-      recognitionRef.current=null;
-      setListening(false);
-      if(automatic&&continuousVoice&&restartRef.current)scheduleListeningRestart(450);
-      else setError('تعذر بدء الاستماع. جرّب مرة ثانية.');
-    }
-  };
-
-  const finishSpeaking=()=>{
-    setSpeaking(false);
-    speakingRef.current=false;
-    if(continuousVoice&&restartRef.current) scheduleListeningRestart(180);
-  };
-
-  const speakReply=(text)=>{
     setSpeaking(true);
-    speakingRef.current=true;
-    speakGeminiSaudiFast(text, apiKey, finishSpeaking, ()=>{
-      speakDeviceFallback(String(text).replace(/\[IMAGE_REQUEST\]/g,''), finishSpeaking);
-    });
+    speakingRef.current = true;
+    if (settings.voiceMode === 'natural') speakNaturalFast(text, settings.geminiApiKey, finishSpeaking);
+    else speakInstant(text, finishSpeaking);
   };
 
-  const sendMessage=async(forcedText,fromVoice=false)=>{
-    const message=(forcedText ?? value).trim();
-    if(!message||loadingRef.current)return;
-    clearRetry();
-    try{recognitionRef.current?.abort?.();}catch{}
-    recognitionRef.current=null;
-    setListening(false);
-    const directUrl = extractUrl(message);
-    if (directUrl && /(افتح|فتح|ودني|روح)/i.test(message)) window.open(directUrl,'_blank','noopener,noreferrer');
-    const nextHistory=[...messagesRef.current,{role:'user',text:message}];
-    setMessages(nextHistory);
-    messagesRef.current=nextHistory;
-    setValue('');
-    setLoading(true);
-    loadingRef.current=true;
+  const maybeOpenDirectly = (message, reply = '') => {
+    const wantsOpen = /(افتح|فتح|ودني|روح|الرابط|لينك)/i.test(message || '');
+    if (!wantsOpen) return false;
+    let url = extractUrl(message) || extractUrl(reply);
+    if (!url && /(قد.?ها|قدها)/i.test(message)) url = PROJECTS.qadha.app;
+    if (!url && /(مُ?عين|معين)/i.test(message)) url = PROJECTS.mueen.repo;
+    if (!url) return false;
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  };
+
+  const sendMessage = async (forcedText, fromVoice = false) => {
+    const message = String(forcedText ?? value).trim();
+    if (!message || loadingRef.current) return;
+
+    stopRecognition(true);
     setError('');
-    try{
-      const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,history:nextHistory.slice(-20),apiKey:apiKey?.trim()||undefined})});
-      const data=await response.json();
-      if(!response.ok) throw new Error(data?.error||'تعذر الحصول على رد');
-      const cleanText=String(data.text||'').replace(/^\[IMAGE_REQUEST\]\s*/,'').trim();
-      const withReply=[...nextHistory,{role:'assistant',text:cleanText}];
-      setMessages(withReply);
-      messagesRef.current=withReply;
-      maybeDirectOpen(message, data.text);
-      if(voiceReplies||fromVoice) speakReply(cleanText);
-      else if(continuousVoice&&fromVoice&&restartRef.current) scheduleListeningRestart(180);
-    }catch(err){
-      setError(err.message||'تعذر الاتصال بالذكاء الاصطناعي');
-      if(continuousVoice&&fromVoice&&restartRef.current) scheduleListeningRestart(700);
-    }finally{
+    setValue('');
+    const userMessage = { role: 'user', text: message };
+    const next = [...messagesRef.current, userMessage];
+    messagesRef.current = next;
+    setMessages(next);
+
+    const localReply = getLocalDateTimeReply(message);
+    if (localReply) {
+      const completed = [...next, { role: 'assistant', text: localReply }];
+      messagesRef.current = completed;
+      setMessages(completed);
+      if (fromVoice) restartWantedRef.current = true;
+      speakReply(localReply);
+      return;
+    }
+
+    maybeOpenDirectly(message);
+    setLoading(true);
+    loadingRef.current = true;
+    if (fromVoice) restartWantedRef.current = true;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      const history = next.slice(-8);
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({ message, history, apiKey: settings.geminiApiKey?.trim() || undefined })
+      });
+      clearTimeout(timeout);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'تعذر الحصول على رد');
+      const cleanText = String(data.text || '').replace(/^\[IMAGE_REQUEST\]\s*/i, '').trim() || 'تم.';
+      const completed = [...next, { role: 'assistant', text: cleanText }];
+      messagesRef.current = completed;
+      setMessages(completed);
+      maybeOpenDirectly(message, data.text);
+      speakReply(cleanText);
+    } catch (err) {
+      const msg = err?.name === 'AbortError' ? 'الرد تأخر أكثر من اللازم. جرّب مرة ثانية.' : (err?.message || 'تعذر الاتصال بالذكاء الاصطناعي');
+      setError(msg);
+      if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(650);
+    } finally {
       setLoading(false);
-      loadingRef.current=false;
+      loadingRef.current = false;
     }
   };
 
-  const toggleListening=()=> listening?stopVoice():beginListening(false);
+  const beginListening = (automatic = false) => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setError('المتصفح هذا ما يدعم التعرف الصوتي. افتح الصفحة من Safari أو Chrome واسمح للمايك.');
+      restartWantedRef.current = false;
+      return;
+    }
+    if (loadingRef.current || listeningRef.current) return;
 
-  return <div className="modal-backdrop" onClick={onClose}>
-    <section className="sheet action-sheet chat-sheet" onClick={e=>e.stopPropagation()}>
-      <div className="sheet-head"><div><small>{action.emoji}</small><h3>{action.title}</h3></div><button onClick={onClose}><X/></button></div>
-      <div className="voice-state"><span className={listening?'dot live':speaking?'dot speaking':'dot'}></span>{listening?'أسمعك الآن...':speaking?'قاعد أرد عليك...':loading?'أفكر وأجهز الرد...':continuousVoice&&restartRef.current?'برجع أسمعك تلقائيًا':'المحادثة الصوتية جاهزة'}</div>
-      <div className="chat-messages">
-        {!messages.length&&<div className="chat-empty">اضغط المايك مرة واحدة وابدأ. بعدها أرد عليك صوتيًا وأرجع أسمعك تلقائيًا بدون ضغط جديد.</div>}
-        {messages.map((m,i)=><div key={i} className={`bubble ${m.role}`}>{m.text}</div>)}
-        {loading&&<div className="bubble assistant typing">أفكر...</div>}
-      </div>
-      <div className="voice-composer modern-composer">
-        <textarea value={value} onChange={e=>setValue(e.target.value)} placeholder="اكتب أو اضغط المايك وتكلم..."/>
-        <button className={listening?'mic-btn listening':'mic-btn'} onClick={toggleListening}>{listening?<MicOff/>:<Mic/>}</button>
-      </div>
-      <div className="composer-actions"><button className="run-btn" onClick={()=>sendMessage()} disabled={loading||!value.trim()}><Send size={18}/>إرسال</button><button className="voice-stop" onClick={stopVoice}><VolumeX size={18}/>إيقاف الصوت</button></div>
-      {error&&<div className="demo-answer ai-error">{error}</div>}
-    </section>
-  </div>
-}
+    stopSpeech();
+    setSpeaking(false);
+    speakingRef.current = false;
+    stopRecognition(true);
+    setError('');
+    utteranceRef.current = '';
 
-function ProjectDashboard({project,onClose}){
-  if(!project)return null;
-  const openUrl=url=>window.open(url,'_blank','noopener,noreferrer');
-  return <div className="modal-backdrop" onClick={onClose}><section className="sheet project-dashboard" onClick={e=>e.stopPropagation()}>
-    <div className="sheet-head"><div><small>لوحة التحكم</small><h3>{project.name}</h3></div><button onClick={onClose}><X/></button></div>
-    <div className="dashboard-hero"><div className={`big-project-logo ${project.color}`}>{project.letter}</div><div><h2>{project.name}</h2><p>{project.desc}</p></div></div>
-    <div className="dashboard-stats">{project.stats.map(([k,v])=><div key={k}><span>{k}</span><b>{v}</b></div>)}</div>
-    <div className="dashboard-actions">
-      {project.app&&<button className="primary-dash" onClick={()=>openUrl(project.app)}><ExternalLink size={19}/>فتح {project.name} في المتصفح</button>}
-      <button onClick={()=>openUrl(project.repo)}><LayoutDashboard size={19}/>فتح ملفات المشروع على GitHub</button>
+    const recognition = new Recognition();
+    recognition.lang = 'ar-SA';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+    let finalText = '';
+    let liveText = '';
+    let fatal = false;
+
+    recognition.onstart = () => {
+      setListening(true);
+      listeningRef.current = true;
+      restartWantedRef.current = true;
+    };
+
+    recognition.onresult = event => {
+      liveText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i]?.[0]?.transcript || '';
+        if (event.results[i].isFinal) finalText += `${t} `;
+        else liveText += `${t} `;
+      }
+      const combined = `${finalText}${liveText}`.trim();
+      if (combined) {
+        utteranceRef.current = combined;
+        setValue(combined);
+      }
+    };
+
+    recognition.onerror = event => {
+      const code = event?.error;
+      setListening(false);
+      listeningRef.current = false;
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        fatal = true;
+        restartWantedRef.current = false;
+        setError('اسمح للموقع باستخدام الميكروفون من إعدادات Safari ثم جرّب مرة ثانية.');
+      } else if (code === 'audio-capture') {
+        fatal = true;
+        restartWantedRef.current = false;
+        setError('تعذر الوصول للمايك. تأكد من صلاحية الميكروفون.');
+      }
+    };
+
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition) recognitionRef.current = null;
+      setListening(false);
+      listeningRef.current = false;
+      const text = (finalText.trim() || utteranceRef.current.trim() || liveText.trim());
+      if (text) {
+        setValue('');
+        sendMessage(text, true);
+      } else if (!fatal && settings.continuousVoice && restartWantedRef.current) {
+        scheduleRestart(automatic ? 520 : 360);
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try { recognition.start(); }
+    catch (_) {
+      recognitionRef.current = null;
+      setListening(false);
+      listeningRef.current = false;
+      if (automatic && settings.continuousVoice && restartWantedRef.current) scheduleRestart(700);
+      else setError('تعذر بدء الاستماع. اضغط المايك مرة ثانية.');
+    }
+  };
+
+  const toggleMic = () => {
+    if (listeningRef.current) {
+      restartWantedRef.current = false;
+      stopRecognition(true);
+      return;
+    }
+    restartWantedRef.current = true;
+    beginListening(false);
+  };
+
+  const useQuickAction = action => {
+    setValue(action.prompt);
+    setTimeout(() => document.querySelector('.composer textarea')?.focus?.(), 0);
+  };
+
+  const results = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const items = [
+      ...QUICK_ACTIONS.map(a => ({ type: 'action', id: a.id, title: a.title, sub: a.prompt, data: a })),
+      { type: 'project', id: 'mueen', title: 'مُعين', sub: PROJECTS.mueen.desc, data: PROJECTS.mueen },
+      { type: 'project', id: 'qadha', title: 'قدّها', sub: PROJECTS.qadha.desc, data: PROJECTS.qadha }
+    ];
+    return items.filter(item => `${item.title} ${item.sub}`.toLowerCase().includes(q)).slice(0, 6);
+  }, [search]);
+
+  return (
+    <div className={`app ${settings.motion ? 'motion' : ''}`} dir="rtl">
+      <div className="ambient-bg"/>
+      {settings.rain && <div className="rain" aria-hidden="true"/>}
+
+      <div className="app-shell">
+        <header className="topbar">
+          <div className="brand">
+            <div className="brand-orb"><Bot size={24}/></div>
+            <div><b>Nawaf AI</b><span><i className={listening ? 'live' : speaking ? 'talking' : ''}/>{status}</span></div>
+          </div>
+          <div className="top-actions">
+            <button className="icon-btn" onClick={() => setSettingsOpen(true)}><Settings size={21}/></button>
+            <button className="icon-btn" onClick={stopEverything}><VolumeX size={21}/></button>
+          </div>
+        </header>
+
+        <section className="hero">
+          <div className="hero-copy">
+            <span className="eyebrow"><Sparkles size={16}/>نسخة السرعة العالية</span>
+            <h1>{greeting}</h1>
+            <p>تكلم طبيعي. أسمعك، أرد عليك بسرعة، وبعدها أرجع أسمعك تلقائيًا.</p>
+          </div>
+          <button className={`big-mic ${listening ? 'listening' : speaking ? 'speaking' : ''}`} onClick={toggleMic} aria-label="بدء المحادثة الصوتية">
+            {listening ? <MicOff size={34}/> : <Mic size={34}/>}<span/>
+          </button>
+        </section>
+
+        <div className="search-wrap">
+          <Search size={19}/>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ابحث في الأدوات والمشاريع…"/>
+          {search && <button onClick={() => setSearch('')}><X size={17}/></button>}
+          {search && <div className="search-popover">
+            {results.length ? results.map(item => (
+              <button key={`${item.type}-${item.id}`} onClick={() => {
+                setSearch('');
+                if (item.type === 'project') setProject(item.data);
+                else useQuickAction(item.data);
+              }}><b>{item.title}</b><span>{item.sub}</span></button>
+            )) : <div className="no-result">ما لقيت شيء مطابق</div>}
+          </div>}
+        </div>
+
+        <section className="quick-grid">
+          {QUICK_ACTIONS.map(action => {
+            const Icon = action.icon;
+            return <button key={action.id} onClick={() => useQuickAction(action)}><span><Icon size={20}/></span><b>{action.title}</b></button>;
+          })}
+        </section>
+
+        <section className="conversation-card">
+          <div className="conversation-head">
+            <div><b>المحادثة</b><span>{settings.voiceMode === 'instant' ? 'صوت فوري' : 'صوت طبيعي سريع'}</span></div>
+            <button className="tiny-btn" onClick={() => { stopEverything(); setMessages([{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }]); messagesRef.current = [{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }]; }}><RotateCcw size={16}/>جديد</button>
+          </div>
+
+          <div className="messages" ref={scrollRef}>
+            {messages.map((m, i) => <div key={i} className={`message ${m.role}`}><div>{m.text}</div></div>)}
+            {loading && <div className="message assistant"><div className="typing"><i/><i/><i/></div></div>}
+          </div>
+
+          {error && <div className="error-box">{error}</div>}
+
+          <div className="composer">
+            <textarea
+              rows="1"
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder={listening ? 'أسمعك الآن…' : 'اكتب أو اضغط المايك وتكلم…'}
+            />
+            <button className={`composer-mic ${listening ? 'active' : ''}`} onClick={toggleMic}>{listening ? <MicOff size={23}/> : <Mic size={23}/>}</button>
+            <button className="send-btn" disabled={!value.trim() || loading} onClick={() => sendMessage()}><Send size={21}/></button>
+          </div>
+        </section>
+
+        <section className="projects-block">
+          <div className="section-head"><div><span>مشاريعي</span><h2>وصول مباشر</h2></div><MoreHorizontal size={22}/></div>
+          <div className="projects-grid">
+            {Object.entries(PROJECTS).map(([id, p]) => (
+              <button className="project-card" key={id} onClick={() => setProject(p)}>
+                <div className="project-mark">{p.letter}</div>
+                <div><b>{p.name}</b><span>{p.desc}</span></div>
+                <ExternalLink size={19}/>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <footer className="footer-note"><Zap size={15}/>مصمم للرد السريع والمحادثة المستمرة على الجوال</footer>
+      </div>
+
+      {settingsOpen && <SettingsPanel settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)}/>} 
+      {project && <ProjectPanel project={project} onClose={() => setProject(null)}/>} 
     </div>
-  </section></div>;
-}
-
-export default function App(){
-  const [settingsOpen,setSettingsOpen]=useState(false);
-  const [activeAction,setActiveAction]=useState(null);
-  const [project,setProject]=useState(null);
-  const [search,setSearch]=useState('');
-  const [settings,setSettings]=useState(()=>{
-    const defaults={rain:true,motion:true,darkOverlay:true,geminiApiKey:'',voiceReplies:true,continuousVoice:true};
-    try{return {...defaults,...(JSON.parse(localStorage.getItem('nawaf-settings'))||{})};}catch{return defaults;}
-  });
-  useEffect(()=>localStorage.setItem('nawaf-settings',JSON.stringify(settings)),[settings]);
-  useEffect(()=>{if('speechSynthesis'in window){window.speechSynthesis.getVoices();window.speechSynthesis.onvoiceschanged=()=>window.speechSynthesis.getVoices();}},[]);
-  const greeting=useMemo(()=>new Date().getHours()<12?'صباح الخير يا نواف ☀️':'مساء الخير يا نواف 🌙',[]);
-  const normalized=search.trim().toLowerCase();
-  const matches=normalized?[...actions.filter(a=>(a.title+a.sub).toLowerCase().includes(normalized)),...(normalized.includes('معين')||normalized.includes('مُعين')?[{id:'mueen',title:'مُعين',sub:'مشروع'}]:[]),...(normalized.includes('قد')?[{id:'qadha',title:'قدّها',sub:'مشروع'}]:[])]:[];
-  const openProject=id=>setProject(projectData[id]);
-
-  return <div className={`page ${settings.motion?'motion-on':'motion-off'} ${settings.darkOverlay?'overlay-on':'overlay-off'}`} dir="rtl">
-    <div className="backdrop-photo"/><div className="page-overlay"/>{settings.rain&&<div className="rain-layer"><i/><i/><i/></div>}
-    <main className="mobile-shell">
-      <header className="top-search"><div className="search-box"><Search size={24}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ابحث في مشاريعك وملاحظاتك..."/></div><button className="settings-btn" onClick={()=>setSettingsOpen(true)}><Settings size={24}/></button></header>
-      {normalized&&<div className="search-results">{matches.length?matches.map(item=><button key={item.id} onClick={()=>item.id==='mueen'||item.id==='qadha'?openProject(item.id):setActiveAction(actions.find(a=>a.id===item.id))}><b>{item.title}</b><span>{item.sub}</span></button>):<div>ما لقيت نتيجة مطابقة</div>}</div>}
-      <section className="hero-card"><div className="hero-bg"/><div className="hero-shade"/><div className="change-pill">مساعدك الشخصي • أسرع</div><div className="hero-copy"><div className="greeting">{greeting}</div><h1>كيف أقدر أساعدك اليوم؟</h1><p>تكلم معي، افتح رابط، أو خلني أساعدك في مشروعك</p></div><button className="mascot-placeholder mascot-idle" onClick={()=>setActiveAction({id:'voice',emoji:'🎙️',title:'محادثة صوتية',sub:'',prompt:''})}><div className="reaction">🎙️</div><div className="boy-head"><span/></div><div className="boy-body"><i/></div></button></section>
-      <section className="action-grid">{actions.map(a=><button key={a.id} className="action-card" onClick={()=>setActiveAction(a)}><span className="action-emoji">{a.emoji}</span><strong>{a.title}</strong><span className="action-sub">{a.sub}</span></button>)}</section>
-      <section className="projects-section"><h2>مشاريعي</h2><div className="projects-grid">
-        <article className="project-card clickable-project" onClick={()=>openProject('mueen')}><div className="project-logo green">م</div><div className="project-info"><strong>مُعين</strong><span>لوحة تحكم المشروع</span></div><button>فتح</button></article>
-        <article className="project-card clickable-project" onClick={()=>openProject('qadha')}><div className="project-logo purple">ق</div><div className="project-info"><strong>قدّها</strong><span>لوحة تحكم + فتح الموقع</span></div><button>فتح</button></article>
-      </div></section>
-      <section className="help-card"><div><h3>محادثة مباشرة</h3><p>رد صوتي أسرع، ذكاء أعلى، وتنفيذ مباشر للروابط.</p></div><button onClick={()=>setActiveAction({id:'ask',emoji:'🎙️',title:'محادثة مع Nawaf AI',sub:'',prompt:''})}><ChevronLeft/></button></section>
-    </main>
-    {settingsOpen&&<SettingsModal settings={settings} setSettings={setSettings} onClose={()=>setSettingsOpen(false)}/>} 
-    {activeAction&&<ConversationSheet action={activeAction} apiKey={settings.geminiApiKey} voiceReplies={settings.voiceReplies} continuousVoice={settings.continuousVoice} onClose={()=>setActiveAction(null)}/>} 
-    {project&&<ProjectDashboard project={project} onClose={()=>setProject(null)}/>} 
-  </div>;
+  );
 }
