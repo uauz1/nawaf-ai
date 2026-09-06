@@ -1,4 +1,5 @@
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const FALLBACK_MODELS = ['gemini-3.7-flash', 'gemini-3.5-flash-lite'];
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -39,42 +40,60 @@ export default async function handler(req, res) {
     }]
   };
 
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents,
-          systemInstruction,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1800
-          }
-        })
-      }
-    );
+  const models = [...new Set([PRIMARY_MODEL, ...FALLBACK_MODELS])];
+  let lastError = null;
 
-    const data = await response.json();
-    if (!response.ok) {
-      console.error('Gemini API error', response.status, data?.error?.message || data);
+  try {
+    for (const model of models) {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents,
+            systemInstruction,
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 1800
+            }
+          })
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok) {
+        const text = data?.candidates?.[0]?.content?.parts
+          ?.map((part) => part?.text || '')
+          .join('')
+          .trim();
+
+        if (!text) {
+          lastError = { status: 502, message: 'Empty response from Gemini' };
+          continue;
+        }
+
+        return res.status(200).json({ text, model });
+      }
+
+      const errorMessage = data?.error?.message || 'Gemini request failed';
+      lastError = { status: response.status, message: errorMessage };
+      console.error('Gemini API error', model, response.status, errorMessage);
+
+      const temporaryCapacityIssue = response.status === 429 || response.status === 503 || /high demand|overloaded|capacity|temporar/i.test(errorMessage);
+      if (temporaryCapacityIssue) continue;
+
       return res.status(response.status).json({
-        error: data?.error?.message || 'Gemini request failed',
+        error: errorMessage,
         code: 'GEMINI_ERROR'
       });
     }
 
-    const text = data?.candidates?.[0]?.content?.parts
-      ?.map((part) => part?.text || '')
-      .join('')
-      .trim();
-
-    if (!text) {
-      return res.status(502).json({ error: 'Empty response from Gemini', code: 'EMPTY_RESPONSE' });
-    }
-
-    return res.status(200).json({ text, model: MODEL });
+    return res.status(lastError?.status || 503).json({
+      error: 'نماذج Gemini عليها ضغط مؤقت حاليًا. جرّب مرة ثانية بعد قليل.',
+      code: 'GEMINI_BUSY'
+    });
   } catch (error) {
     console.error('Nawaf AI chat error', error);
     return res.status(500).json({ error: 'تعذر الاتصال بالذكاء الاصطناعي', code: 'SERVER_ERROR' });
