@@ -11,7 +11,20 @@ const isIOSWebKit = (() => {
 })();
 
 if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && window.SpeechSynthesisUtterance) {
+  // One-time migration: force the fast/reliable voice defaults on iPhone.
+  try {
+    const key = 'nawaf-ai-settings';
+    const saved = JSON.parse(localStorage.getItem(key) || '{}');
+    localStorage.setItem(key, JSON.stringify({
+      ...saved,
+      voiceReplies: true,
+      continuousVoice: true,
+      voiceMode: 'instant'
+    }));
+  } catch (_) {}
+
   const synth = window.speechSynthesis;
+  const proto = Object.getPrototypeOf(synth);
   const nativeSpeak = synth.speak.bind(synth);
   const nativeCancel = synth.cancel.bind(synth);
   const nativeResume = synth.resume.bind(synth);
@@ -64,11 +77,8 @@ if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && wi
     clearKeepAlive();
     keepAliveTimer = setInterval(() => {
       if (id !== runId) return clearKeepAlive();
-      try {
-        if (synth.paused) nativeResume();
-        else nativeResume();
-      } catch (_) {}
-    }, 450);
+      try { nativeResume(); } catch (_) {}
+    }, 400);
   };
 
   const robustSpeak = original => {
@@ -94,10 +104,10 @@ if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && wi
 
     const fail = event => {
       if (finished || id !== runId) return;
-      // WebKit often emits transient interrupted/canceled errors. Continue when possible.
       const code = event?.error || '';
-      if (/interrupted|canceled|cancelled/i.test(code) && index < chunks.length) {
-        setTimeout(speakNext, 30);
+      // Safari frequently throws these between chunks; continue instead of going silent.
+      if (/interrupted|canceled|cancelled|audio-busy/i.test(code) && index < chunks.length) {
+        setTimeout(speakNext, 45);
         return;
       }
       finished = true;
@@ -112,7 +122,7 @@ if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && wi
 
       const u = new SpeechSynthesisUtterance(chunks[index++]);
       copyVoiceProps(original, u);
-      activeUtterances.push(u); // Keep strong references; iOS may stop if GC collects utterance.
+      activeUtterances.push(u); // Prevent iOS garbage-collection from killing speech mid-sentence.
 
       u.onstart = event => {
         if (!started) {
@@ -122,10 +132,9 @@ if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && wi
         try { nativeResume(); } catch (_) {}
       };
 
-      u.onend = event => {
+      u.onend = () => {
         if (id !== runId || finished) return;
-        // Give WebKit a tiny audio-session handoff gap between chunks.
-        setTimeout(speakNext, 35);
+        setTimeout(speakNext, 40);
       };
 
       u.onerror = fail;
@@ -133,30 +142,36 @@ if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && wi
       try {
         nativeSpeak(u);
         keepAlive(id);
-        // Safari occasionally queues but stays paused after speech recognition.
+        // Safari may stay paused immediately after SpeechRecognition releases the mic.
         setTimeout(() => {
           if (id !== runId || finished) return;
           try { nativeResume(); } catch (_) {}
-        }, 80);
+        }, 70);
+        setTimeout(() => {
+          if (id !== runId || finished) return;
+          try { nativeResume(); } catch (_) {}
+        }, 180);
       } catch (error) {
         fail({ error: error?.message || 'speak-failed' });
       }
     };
 
-    // Slight handoff delay from microphone capture to speaker output on iPhone.
-    setTimeout(speakNext, 70);
+    // Tiny audio-session handoff delay from microphone to speaker on iPhone.
+    setTimeout(speakNext, 85);
   };
 
-  // Patch methods used by the app.
+  const robustCancel = () => {
+    runId += 1;
+    clearKeepAlive();
+    activeUtterances = [];
+    try { nativeCancel(); } catch (_) {}
+  };
+
+  // Patch both the instance and prototype (some iOS versions ignore instance replacement).
   try { synth.speak = robustSpeak; } catch (_) {}
-  try {
-    synth.cancel = () => {
-      runId += 1;
-      clearKeepAlive();
-      activeUtterances = [];
-      try { nativeCancel(); } catch (_) {}
-    };
-  } catch (_) {}
+  try { if (proto) proto.speak = function(utterance) { return robustSpeak(utterance); }; } catch (_) {}
+  try { synth.cancel = robustCancel; } catch (_) {}
+  try { if (proto) proto.cancel = function() { return robustCancel(); }; } catch (_) {}
   try { synth.pause = nativePause; } catch (_) {}
   try { synth.resume = nativeResume; } catch (_) {}
 
@@ -174,11 +189,11 @@ if (isIOSWebKit && typeof window !== 'undefined' && window.speechSynthesis && wi
       setTimeout(() => {
         try { nativeCancel(); } catch (_) {}
         activeUtterances = [];
-      }, 90);
+      }, 100);
     } catch (_) {}
   };
 
   ['pointerdown', 'touchstart', 'click'].forEach(type => {
-    window.addEventListener(type, unlock, { capture: true, passive: true, once: false });
+    window.addEventListener(type, unlock, { capture: true, passive: true });
   });
 }
