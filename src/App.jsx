@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search, Settings, Lightbulb, Zap, ClipboardList, Keyboard, ChevronLeft } from 'lucide-react';
 
 const actions = [
@@ -8,7 +8,39 @@ const actions = [
   { icon: Keyboard, title: 'مساعدة برمجية', sub: 'كود وحلول تقنية' },
 ];
 
+const mascotModes = [
+  { id: 'idle', emoji: '🙂', label: 'يراقبك' },
+  { id: 'wave', emoji: '👋', label: 'يسلم عليك' },
+  { id: 'think', emoji: '🤔', label: 'يفكر' },
+  { id: 'happy', emoji: '😄', label: 'متحمس' },
+  { id: 'sleepy', emoji: '😴', label: 'نعسان' },
+];
+
+function pickNext(currentId) {
+  const pool = mascotModes.filter((m) => m.id !== currentId);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 export default function App() {
+  const [mascotMode, setMascotMode] = useState(mascotModes[0]);
+  const [reaction, setReaction] = useState('');
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setMascotMode((current) => pickNext(current.id));
+    }, 8000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const interactMascot = () => {
+    const reactions = ['👋','😂','✨','🤨','😎','💡'];
+    setReaction(reactions[Math.floor(Math.random() * reactions.length)]);
+    setMascotMode((current) => pickNext(current.id));
+    window.setTimeout(() => setReaction(''), 1300);
+  };
+
+  const greeting = useMemo(() => new Date().getHours() < 12 ? 'صباح الخير يا نواف ☀️' : 'مساء الخير يا نواف 🌙', []);
+
   return (
     <div className="page" dir="rtl">
       <div className="backdrop-photo" />
@@ -28,15 +60,22 @@ export default function App() {
           <div className="hero-shade" />
           <div className="change-pill">يتغير كل 8 ثواني</div>
           <div className="hero-copy">
-            <div className="greeting">مساء الخير يا نواف 🌙</div>
+            <div className="greeting">{greeting}</div>
             <h1>كيف أقدر أساعدك اليوم؟</h1>
             <p>الأحد، ٢٤ ربيع الأول، ١٤٤٨ هـ</p>
           </div>
-          <div className="mascot-placeholder">
-            <div className="reaction">😅</div>
+
+          <button
+            className={`mascot-placeholder mascot-${mascotMode.id}`}
+            onClick={interactMascot}
+            aria-label={`الشخصية: ${mascotMode.label}`}
+            title="اضغط على الشخصية"
+          >
+            <div className="reaction">{reaction || mascotMode.emoji}</div>
             <div className="boy-head"><span/></div>
             <div className="boy-body"><i/></div>
-          </div>
+            <span className="mascot-status">{mascotMode.label}</span>
+          </button>
         </section>
 
         <section className="action-grid">
