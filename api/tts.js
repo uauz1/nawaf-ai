@@ -1,4 +1,4 @@
-const MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'];
+const MODEL = 'gemini-3.1-flash-tts-preview';
 
 function pcm16ToWavBase64(pcmBase64, sampleRate = 24000) {
   const pcm = Buffer.from(pcmBase64, 'base64');
@@ -37,56 +37,47 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
 
-  const prompt = `اقرئي النص التالي بصوت أنثوي سعودي شاب وطبيعي وواضح، بسرعة طبيعية مائلة للسرعة. لا تضيفي أي كلمة غير موجودة في النص.\n\n${text.slice(0, 1800)}`;
-  let lastError;
+  const prompt = `اقرئي النص التالي بصوت عربي شاب طبيعي وواضح، وبسرعة محادثة طبيعية مائلة للسرعة. لا تضيفي أي كلمة غير موجودة في النص.\n\n${text.slice(0, 1200)}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6500);
 
-  for (const model of MODELS) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseModalities: ['AUDIO'],
-            speechConfig: {
-              languageCode: 'ar-XA',
-              voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } }
-            }
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            languageCode: 'ar-XA',
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } }
           }
-        })
-      });
-      clearTimeout(timeout);
-      const data = await response.json();
-      if (!response.ok) {
-        lastError = data?.error?.message || `TTS failed (${response.status})`;
-        if ([404, 429, 503].includes(response.status)) continue;
-        return res.status(response.status).json({ error: lastError, code: 'TTS_ERROR' });
-      }
-
-      const part = data?.candidates?.[0]?.content?.parts?.find(p => p?.inlineData?.data);
-      if (!part?.inlineData?.data) {
-        lastError = 'Empty audio response';
-        continue;
-      }
-
-      const mime = part.inlineData.mimeType || 'audio/L16;rate=24000';
-      const rateMatch = /rate=(\d+)/i.exec(mime);
-      const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
-      const wavBase64 = /audio\/(wav|wave)/i.test(mime)
-        ? part.inlineData.data
-        : pcm16ToWavBase64(part.inlineData.data, sampleRate);
-
-      res.setHeader('Cache-Control', 'no-store');
-      return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model });
-    } catch (error) {
-      clearTimeout(timeout);
-      lastError = error?.name === 'AbortError' ? 'TTS timeout' : (error?.message || 'TTS request failed');
+        }
+      })
+    });
+    clearTimeout(timeout);
+    const data = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json({ error: data?.error?.message || `TTS failed (${response.status})`, code: 'TTS_ERROR' });
     }
-  }
 
-  return res.status(503).json({ error: lastError || 'تعذر توليد الصوت الآن', code: 'TTS_BUSY' });
+    const part = data?.candidates?.[0]?.content?.parts?.find(p => p?.inlineData?.data);
+    if (!part?.inlineData?.data) return res.status(502).json({ error: 'Empty audio response', code: 'EMPTY_TTS' });
+
+    const mime = part.inlineData.mimeType || 'audio/L16;rate=24000';
+    const rateMatch = /rate=(\d+)/i.exec(mime);
+    const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
+    const wavBase64 = /audio\/(wav|wave)/i.test(mime)
+      ? part.inlineData.data
+      : pcm16ToWavBase64(part.inlineData.data, sampleRate);
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model: MODEL });
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error?.name === 'AbortError') return res.status(504).json({ error: 'TTS timeout', code: 'TTS_TIMEOUT' });
+    return res.status(503).json({ error: error?.message || 'تعذر توليد الصوت الآن', code: 'TTS_BUSY' });
+  }
 }
