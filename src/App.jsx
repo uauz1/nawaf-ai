@@ -23,21 +23,41 @@ function pickNext(currentId) {
 
 function SettingsModal({ settings, setSettings, onClose }) {
   const toggle = (key) => setSettings((s) => ({ ...s, [key]: !s[key] }));
+  const hasGeminiKey = Boolean(settings.geminiApiKey?.trim());
+
   return <div className="modal-backdrop" onClick={onClose}>
     <section className="sheet settings-sheet" onClick={(e) => e.stopPropagation()}>
       <div className="sheet-head"><div><small>Nawaf AI</small><h3>الإعدادات</h3></div><button onClick={onClose}><X/></button></div>
+
+      <div className="api-key-card">
+        <div className="api-key-head">
+          <div><b>Gemini API Key</b><small>ألصق مفتاح Gemini هنا لتفعيل الذكاء الاصطناعي</small></div>
+          <span className={hasGeminiKey ? 'key-status ready' : 'key-status'}>{hasGeminiKey ? 'مضاف' : 'غير مضاف'}</span>
+        </div>
+        <input
+          type="password"
+          value={settings.geminiApiKey || ''}
+          onChange={(e) => setSettings((s) => ({ ...s, geminiApiKey: e.target.value }))}
+          placeholder="AIza..."
+          autoComplete="off"
+          spellCheck="false"
+          dir="ltr"
+        />
+        <small className="key-note">المفتاح محفوظ على هذا الجهاز فقط، ولن يظهر كنص واضح داخل الخانة.</small>
+      </div>
+
       <div className="settings-list">
         <button onClick={() => toggle('rain')}><span><b>تأثير المطر</b><small>إظهار المطر فوق الخلفية</small></span><i className={settings.rain?'switch on':'switch'}><em/></i></button>
         <button onClick={() => toggle('autoMascot')}><span><b>حركة الشخصية تلقائيًا</b><small>تتغير حالتها كل 8 ثواني</small></span><i className={settings.autoMascot?'switch on':'switch'}><em/></i></button>
         <button onClick={() => toggle('motion')}><span><b>الحركات والأنيميشن</b><small>تفعيل الحركات الخفيفة</small></span><i className={settings.motion?'switch on':'switch'}><em/></i></button>
         <button onClick={() => toggle('darkOverlay')}><span><b>تعتيم الخلفية</b><small>يزيد وضوح النص والبطاقات</small></span><i className={settings.darkOverlay?'switch on':'switch'}><em/></i></button>
       </div>
-      <div className="sheet-actions"><button className="secondary" onClick={() => setSettings({rain:true,autoMascot:true,motion:true,darkOverlay:true})}><RotateCcw size={18}/>افتراضي</button><button className="primary" onClick={onClose}><Save size={18}/>حفظ</button></div>
+      <div className="sheet-actions"><button className="secondary" onClick={() => setSettings((s) => ({...s,rain:true,autoMascot:true,motion:true,darkOverlay:true}))}><RotateCcw size={18}/>افتراضي</button><button className="primary" onClick={onClose}><Save size={18}/>حفظ</button></div>
     </section>
   </div>
 }
 
-function ActionSheet({ action, onClose }) {
+function ActionSheet({ action, onClose, apiKey }) {
   const [value, setValue] = useState(action?.prompt || '');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
@@ -54,12 +74,12 @@ function ActionSheet({ action, onClose }) {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
+        body: JSON.stringify({ message, apiKey: apiKey?.trim() || undefined })
       });
       const data = await response.json();
       if (!response.ok) {
         if (data?.code === 'MISSING_API_KEY') {
-          throw new Error('مفتاح Gemini غير مضاف في Vercel إلى الآن.');
+          throw new Error('أضف مفتاح Gemini من الإعدادات أولًا.');
         }
         throw new Error(data?.error || 'تعذر الحصول على رد');
       }
@@ -103,8 +123,9 @@ export default function App() {
   const [project, setProject] = useState(null);
   const [search, setSearch] = useState('');
   const [settings, setSettings] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('nawaf-settings')) || {rain:true,autoMascot:true,motion:true,darkOverlay:true}; }
-    catch { return {rain:true,autoMascot:true,motion:true,darkOverlay:true}; }
+    const defaults = {rain:true,autoMascot:true,motion:true,darkOverlay:true,geminiApiKey:''};
+    try { return { ...defaults, ...(JSON.parse(localStorage.getItem('nawaf-settings')) || {}) }; }
+    catch { return defaults; }
   });
 
   useEffect(() => { localStorage.setItem('nawaf-settings', JSON.stringify(settings)); }, [settings]);
@@ -161,7 +182,7 @@ export default function App() {
     </main>
 
     {settingsOpen&&<SettingsModal settings={settings} setSettings={setSettings} onClose={()=>setSettingsOpen(false)}/>} 
-    {activeAction&&<ActionSheet action={activeAction} onClose={()=>setActiveAction(null)}/>} 
+    {activeAction&&<ActionSheet action={activeAction} apiKey={settings.geminiApiKey} onClose={()=>setActiveAction(null)}/>} 
     {project&&<ProjectSheet project={project} onClose={()=>setProject(null)}/>} 
   </div>;
 }
