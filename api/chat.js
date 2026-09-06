@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     : process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
 
-  const rawHistory = Array.isArray(history) ? history.slice(-8) : [];
+  const rawHistory = Array.isArray(history) ? history.slice(-6) : [];
   const safeHistory = rawHistory.filter((item, index) => {
     if (!item || typeof item.text !== 'string') return false;
     const isLast = index === rawHistory.length - 1;
@@ -55,28 +55,28 @@ export default async function handler(req, res) {
   const contents = [
     ...safeHistory.map(item => ({
       role: item.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: item.text.slice(0, 4500) }]
+      parts: [{ text: item.text.slice(0, 3200) }]
     })),
-    { role: 'user', parts: [{ text: message.slice(0, 9000) }] }
+    { role: 'user', parts: [{ text: message.slice(0, 7000) }] }
   ];
 
   const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي الذكي والسريع. تحدث بسعودي طبيعي ومباشر.
 
-الوقت الحالي المؤكد في السعودية (Asia/Riyadh): ${riyadh.date}، الساعة ${riyadh.time}. التاريخ الميلادي الرقمي: ${riyadh.iso}. لا تخمّن التاريخ أو الوقت أبدًا.
+الوقت الحالي المؤكد في السعودية (Asia/Riyadh): ${riyadh.date}، الساعة ${riyadh.time}. التاريخ الميلادي الرقمي: ${riyadh.iso}. لا تخمّن التاريخ أو الوقت.
 
-المشروعان الأساسيان: مُعين وقدّها. اربط الرسائل السابقة ببعضها وافهم المقصود من السياق.
+المشروعان الأساسيان: مُعين وقدّها. اربط السياق السابق لكن لا تكرر الكلام.
 
-أسلوب الرد:
-- ابدأ بالجواب مباشرة بدون مقدمات أو تكرار للسؤال.
-- في المحادثة اليومية والصوتية اجعل الرد غالبًا جملة أو جملتين، ثم زد التفاصيل فقط إذا احتاج الطلب.
-- إذا كان الطلب معقدًا فحلله جيدًا لكن أعط النتيجة أولًا ثم التفاصيل المهمة.
-- لا تدّع تنفيذ شيء لم يحدث فعلاً.
-- عند طلب رابط ضعه كاملًا. رابط قدّها عند الحاجة: https://qadha-games.uauz99.chatgpt.site/
-- عند طلب صورة ابدأ بـ [IMAGE_REQUEST] ثم وصف قصير وواضح.
-- إذا كان الطلب واضحًا اختر التصرف الأنسب بدل كثرة الأسئلة.` }] };
+قواعد الرد:
+- أعط الجواب من أول جملة بدون مقدمة.
+- للمحادثة الصوتية واليومية: جملة أو جملتان غالبًا، ثم تفاصيل فقط عند الحاجة.
+- إذا كان الطلب معقدًا: النتيجة أولًا ثم النقاط المهمة.
+- لا تدّع تنفيذ شيء لم يحدث.
+- إذا طلب رابطًا، ضعه كاملًا. رابط قدّها عند الحاجة: https://qadha-games.uauz99.chatgpt.site/
+- إذا طلب صورة ابدأ بـ [IMAGE_REQUEST] ثم وصف قصير وواضح.
+- لا تسأل سؤالًا إضافيًا إلا إذا كان التنفيذ مستحيلًا بدونه.` }] };
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${PRIMARY_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
@@ -87,9 +87,8 @@ export default async function handler(req, res) {
         contents,
         systemInstruction,
         generationConfig: {
-          temperature: 0.56,
-          maxOutputTokens: 260,
-          topP: 0.88
+          thinkingConfig: { thinkingLevel: 'minimal' },
+          maxOutputTokens: 220
         }
       })
     });
