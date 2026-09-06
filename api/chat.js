@@ -1,11 +1,9 @@
-const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const FALLBACK_MODELS = [];
+const PRIMARY_MODEL = 'gemini-3.6-flash';
 
 function getRiyadhNow() {
   const now = new Date();
   const date = new Intl.DateTimeFormat('ar-SA-u-ca-gregory', {
-    timeZone: 'Asia/Riyadh',
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    timeZone: 'Asia/Riyadh', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
   }).format(now);
   const time = new Intl.DateTimeFormat('ar-SA', {
     timeZone: 'Asia/Riyadh', hour: 'numeric', minute: '2-digit', hour12: true
@@ -16,21 +14,14 @@ function getRiyadhNow() {
   return { date, time, iso };
 }
 
-function isDirectDateTimeQuestion(message) {
+function quickLocalReply(message, riyadh) {
   const text = String(message || '').trim();
   const asksDate = /(وش|ايش|إيش|ما هو|ماهي|كم).*(التاريخ|تاريخ اليوم)|تاريخ اليوم|اليوم كم|وش اليوم|اي يوم|أي يوم/i.test(text);
   const asksTime = /(وش|ايش|إيش|كم).*(الوقت|الساعة)|كم الساعة|وش الوقت|الوقت الحين|الساعة كم/i.test(text);
-  return { asksDate, asksTime };
-}
-
-function quickLocalReply(message, riyadh) {
-  const { asksDate, asksTime } = isDirectDateTimeQuestion(message);
-  if (asksDate || asksTime) {
-    if (asksDate && asksTime) return `اليوم ${riyadh.date}، والوقت الآن ${riyadh.time} بتوقيت الرياض.`;
-    if (asksDate) return `اليوم ${riyadh.date}.`;
-    return `الوقت الآن ${riyadh.time} بتوقيت الرياض.`;
-  }
-  return '';
+  if (!asksDate && !asksTime) return '';
+  if (asksDate && asksTime) return `اليوم ${riyadh.date}، والوقت الآن ${riyadh.time} بتوقيت الرياض.`;
+  if (asksDate) return `اليوم ${riyadh.date}.`;
+  return `الوقت الآن ${riyadh.time} بتوقيت الرياض.`;
 }
 
 export default async function handler(req, res) {
@@ -54,7 +45,7 @@ export default async function handler(req, res) {
     : process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
 
-  const rawHistory = Array.isArray(history) ? history.slice(-10) : [];
+  const rawHistory = Array.isArray(history) ? history.slice(-8) : [];
   const safeHistory = rawHistory.filter((item, index) => {
     if (!item || typeof item.text !== 'string') return false;
     const isLast = index === rawHistory.length - 1;
@@ -64,55 +55,60 @@ export default async function handler(req, res) {
   const contents = [
     ...safeHistory.map(item => ({
       role: item.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: item.text.slice(0, 6000) }]
+      parts: [{ text: item.text.slice(0, 4500) }]
     })),
-    { role: 'user', parts: [{ text: message.slice(0, 10000) }] }
+    { role: 'user', parts: [{ text: message.slice(0, 9000) }] }
   ];
 
-  const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي. تحدث بسعودي طبيعي، ذكي، مباشر وسريع.
+  const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي الذكي والسريع. تحدث بسعودي طبيعي ومباشر.
 
 الوقت الحالي المؤكد في السعودية (Asia/Riyadh): ${riyadh.date}، الساعة ${riyadh.time}. التاريخ الميلادي الرقمي: ${riyadh.iso}. لا تخمّن التاريخ أو الوقت أبدًا.
 
-المشروعان الأساسيان: مُعين وقدّها. افهم السياق واربط الرسائل السابقة ببعضها.
+المشروعان الأساسيان: مُعين وقدّها. اربط الرسائل السابقة ببعضها وافهم المقصود من السياق.
 
-قواعد مهمة:
-- في المحادثة العادية والصوتية: ابدأ بالجواب مباشرة واجعل الرد غالبًا جملة أو جملتين فقط، إلا إذا طلب نواف شرحًا أو تفاصيل.
-- لا تكرر السؤال ولا مقدمات طويلة ولا عبارات حشو.
-- نفّذ الطلب الواضح عمليًا قدر الإمكان، ولا تدّع تنفيذ شيء لم يحدث.
-- عند طلب رابط، ضع الرابط كاملًا. رابط قدّها عند الحاجة: https://qadha-games.uauz99.chatgpt.site/
+أسلوب الرد:
+- ابدأ بالجواب مباشرة بدون مقدمات أو تكرار للسؤال.
+- في المحادثة اليومية والصوتية اجعل الرد غالبًا جملة أو جملتين، ثم زد التفاصيل فقط إذا احتاج الطلب.
+- إذا كان الطلب معقدًا فحلله جيدًا لكن أعط النتيجة أولًا ثم التفاصيل المهمة.
+- لا تدّع تنفيذ شيء لم يحدث فعلاً.
+- عند طلب رابط ضعه كاملًا. رابط قدّها عند الحاجة: https://qadha-games.uauz99.chatgpt.site/
 - عند طلب صورة ابدأ بـ [IMAGE_REQUEST] ثم وصف قصير وواضح.
-- إذا كان الطلب بسيطًا، أعطِ أبسط جواب صحيح فورًا.` }] };
+- إذا كان الطلب واضحًا اختر التصرف الأنسب بدل كثرة الأسئلة.` }] };
 
-  const models = [...new Set([PRIMARY_MODEL, ...FALLBACK_MODELS])];
-  let lastError = null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
   try {
-    for (const model of models) {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents,
-          systemInstruction,
-          generationConfig: {
-            temperature: 0.58,
-            maxOutputTokens: 280,
-            topP: 0.88
-          }
-        })
-      });
-      const data = await response.json();
-      if (response.ok) {
-        const text = data?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('').trim();
-        if (!text) { lastError = { status: 502, message: 'Empty response from Gemini' }; continue; }
-        res.setHeader('Cache-Control', 'no-store');
-        return res.status(200).json({ text, model, riyadhDate: riyadh.iso });
-      }
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${PRIMARY_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents,
+        systemInstruction,
+        generationConfig: {
+          temperature: 0.56,
+          maxOutputTokens: 260,
+          topP: 0.88
+        }
+      })
+    });
+    clearTimeout(timeout);
+    const data = await response.json();
+
+    if (!response.ok) {
       const errorMessage = data?.error?.message || 'Gemini request failed';
-      lastError = { status: response.status, message: errorMessage };
-      return res.status(response.status).json({ error: errorMessage, code: 'GEMINI_ERROR' });
+      return res.status(response.status).json({ error: errorMessage, code: 'GEMINI_ERROR', model: PRIMARY_MODEL });
     }
-    return res.status(lastError?.status || 503).json({ error: 'الذكاء عليه ضغط مؤقت حاليًا. جرّب مرة ثانية بعد قليل.', code: 'GEMINI_BUSY' });
+
+    const text = data?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('').trim();
+    if (!text) return res.status(502).json({ error: 'رجع الذكاء رد فارغ. جرّب مرة ثانية.', code: 'EMPTY_RESPONSE' });
+
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ text, model: PRIMARY_MODEL, riyadhDate: riyadh.iso });
   } catch (error) {
+    clearTimeout(timeout);
+    if (error?.name === 'AbortError') return res.status(504).json({ error: 'الرد تأخر أكثر من اللازم. جرّب مرة ثانية.', code: 'AI_TIMEOUT' });
     console.error('Nawaf AI chat error', error);
     return res.status(500).json({ error: 'تعذر الاتصال بالذكاء الاصطناعي', code: 'SERVER_ERROR' });
   }
