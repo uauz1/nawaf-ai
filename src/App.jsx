@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bot, Brain, ExternalLink, Gauge, Github, Mic, MicOff, Moon, MoreHorizontal,
+  Bot, Brain, ExternalLink, Gauge, Github, Mic, MicOff, MoreHorizontal,
   RotateCcw, Search, Send, Settings, Sparkles, Volume2, VolumeX, X, Zap
 } from 'lucide-react';
 
@@ -13,14 +13,12 @@ const QUICK_ACTIONS = [
 
 const PROJECTS = {
   mueen: {
-    name: 'مُعين',
-    letter: 'م',
+    name: 'مُعين', letter: 'م',
     desc: 'القرآن، الصلاة، الأذكار، القبلة وتجربة إسلامية متكاملة.',
     repo: 'https://github.com/uauz1/mueen-islamic-app'
   },
   qadha: {
-    name: 'قدّها',
-    letter: 'ق',
+    name: 'قدّها', letter: 'ق',
     desc: 'منصة ألعاب جماعية وتحديات بين الأصدقاء.',
     repo: 'https://github.com/uauz1/game',
     app: 'https://qadha-games.uauz99.chatgpt.site/'
@@ -33,11 +31,20 @@ const isIOS = () => {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 };
 
+let speechRun = 0;
 let activeAudio = null;
-let speechGeneration = 0;
+let activeUtterances = [];
+let speechKeepAlive = null;
+
+function clearSpeechKeepAlive() {
+  if (speechKeepAlive) clearInterval(speechKeepAlive);
+  speechKeepAlive = null;
+}
 
 function stopSpeech() {
-  speechGeneration += 1;
+  speechRun += 1;
+  clearSpeechKeepAlive();
+  activeUtterances = [];
   try {
     if (activeAudio) {
       activeAudio.pause?.();
@@ -49,32 +56,124 @@ function stopSpeech() {
 }
 
 function pickArabicVoice() {
-  if (!window.speechSynthesis) return null;
-  const voices = window.speechSynthesis.getVoices();
-  const arabic = voices.filter(v => /^ar([_-]|$)/i.test(v.lang));
-  const saudi = arabic.filter(v => /ar[-_]SA/i.test(v.lang));
-  const female = /zariyah|hala|layla|laila|mariam|maryam|salma|sara|female/i;
-  return saudi.find(v => female.test(v.name)) || arabic.find(v => female.test(v.name)) || saudi[0] || arabic[0] || null;
+  const synth = window.speechSynthesis;
+  if (!synth) return null;
+  const voices = synth.getVoices?.() || [];
+  const arabic = voices.filter(v => /^ar([_-]|$)/i.test(v.lang || ''));
+  const saudi = arabic.filter(v => /ar[-_]SA/i.test(v.lang || ''));
+  const preferred = /zariyah|hala|layla|laila|mariam|maryam|salma|sara|female|majed/i;
+  return saudi.find(v => preferred.test(v.name || '')) || arabic.find(v => preferred.test(v.name || '')) || saudi[0] || arabic[0] || voices[0] || null;
 }
 
-function speakInstant(text, onEnd) {
-  const cleaned = String(text || '').replace(/^\[IMAGE_REQUEST\]\s*/i, '').trim();
-  if (!cleaned || !window.speechSynthesis) {
+function splitSpeech(text, maxWords = 7) {
+  const cleaned = String(text || '').replace(/^\[IMAGE_REQUEST\]\s*/i, '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return [];
+  const sentences = cleaned.split(/(?<=[.!?؟،؛:])\s+/u).filter(Boolean);
+  const chunks = [];
+  for (const sentence of sentences) {
+    const words = sentence.split(/\s+/).filter(Boolean);
+    if (words.length <= maxWords) chunks.push(sentence);
+    else for (let i = 0; i < words.length; i += maxWords) chunks.push(words.slice(i, i + maxWords).join(' '));
+  }
+  return chunks.length ? chunks : [cleaned];
+}
+
+function primeSpeech() {
+  const synth = window.speechSynthesis;
+  if (!synth || !window.SpeechSynthesisUtterance) return;
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.lang = 'ar-SA';
+    u.volume = 0.01;
+    u.rate = 2;
+    activeUtterances.push(u);
+    synth.speak(u);
+    setTimeout(() => {
+      try { synth.resume?.(); } catch (_) {}
+    }, 30);
+  } catch (_) {}
+}
+
+function speakInstant(text, onEnd, onStatus) {
+  const chunks = splitSpeech(text, isIOS() ? 6 : 9);
+  const synth = window.speechSynthesis;
+  if (!chunks.length || !synth || !window.SpeechSynthesisUtterance) {
+    onStatus?.('غير مدعوم');
     onEnd?.();
     return false;
   }
+
   stopSpeech();
-  const generation = speechGeneration;
-  const u = new SpeechSynthesisUtterance(cleaned);
-  u.lang = 'ar-SA';
-  u.rate = isIOS() ? 1.13 : 1.08;
-  u.pitch = 1.02;
-  u.volume = 1;
+  const run = speechRun;
   const voice = pickArabicVoice();
-  if (voice) u.voice = voice;
-  u.onend = () => generation === speechGeneration && onEnd?.();
-  u.onerror = () => generation === speechGeneration && onEnd?.();
-  window.speechSynthesis.speak(u);
+  let index = 0;
+  let finished = false;
+  let watchdog = null;
+
+  const finish = () => {
+    if (finished || run !== speechRun) return;
+    finished = true;
+    if (watchdog) clearTimeout(watchdog);
+    clearSpeechKeepAlive();
+    activeUtterances = [];
+    onStatus?.('جاهز');
+    onEnd?.();
+  };
+
+  const next = () => {
+    if (finished || run !== speechRun) return;
+    if (index >= chunks.length) return finish();
+
+    const chunk = chunks[index++];
+    const u = new SpeechSynthesisUtterance(chunk);
+    u.lang = 'ar-SA';
+    u.rate = isIOS() ? 1.08 : 1.05;
+    u.pitch = 1.0;
+    u.volume = 1;
+    if (voice) u.voice = voice;
+    activeUtterances = [u];
+
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      if (run !== speechRun || finished) return;
+      try { synth.resume?.(); } catch (_) {}
+      setTimeout(() => {
+        if (run !== speechRun || finished) return;
+        try { synth.cancel?.(); } catch (_) {}
+        setTimeout(next, 80);
+      }, 700);
+    }, 4200);
+
+    u.onstart = () => {
+      onStatus?.(`يتكلم ${index}/${chunks.length}`);
+      try { synth.resume?.(); } catch (_) {}
+    };
+    u.onend = () => {
+      if (watchdog) clearTimeout(watchdog);
+      setTimeout(next, isIOS() ? 55 : 25);
+    };
+    u.onerror = event => {
+      if (watchdog) clearTimeout(watchdog);
+      const code = event?.error || '';
+      if (/interrupted|canceled|cancelled/i.test(code)) setTimeout(next, 80);
+      else finish();
+    };
+
+    try {
+      synth.speak(u);
+      setTimeout(() => { try { synth.resume?.(); } catch (_) {} }, 80);
+    } catch (_) {
+      setTimeout(next, 80);
+    }
+  };
+
+  speechKeepAlive = setInterval(() => {
+    if (run !== speechRun || finished) return clearSpeechKeepAlive();
+    try { synth.resume?.(); } catch (_) {}
+  }, 300);
+
+  onStatus?.('بدء الصوت…');
+  setTimeout(next, isIOS() ? 110 : 20);
   return true;
 }
 
@@ -83,42 +182,70 @@ async function fetchNaturalAudio(text, apiKey, signal) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
-    body: JSON.stringify({ text: String(text || '').slice(0, 1800), apiKey: apiKey?.trim() || undefined })
+    body: JSON.stringify({ text: String(text || '').slice(0, 1200), apiKey: apiKey?.trim() || undefined })
   });
   const data = await response.json();
   if (!response.ok || !data?.audioBase64) throw new Error(data?.error || 'تعذر توليد الصوت');
   return data;
 }
 
-async function speakNaturalFast(text, apiKey, onEnd) {
+function playAudioData(data, run, onStatus) {
+  return new Promise((resolve, reject) => {
+    if (!data || run !== speechRun) return resolve();
+    const audio = new Audio(`data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`);
+    activeAudio = audio;
+    audio.preload = 'auto';
+    audio.onplaying = () => onStatus?.('صوت طبيعي');
+    audio.onended = () => {
+      if (activeAudio === audio) activeAudio = null;
+      resolve();
+    };
+    audio.onerror = error => {
+      if (activeAudio === audio) activeAudio = null;
+      reject(error || new Error('audio playback failed'));
+    };
+    audio.play().catch(reject);
+  });
+}
+
+async function speakHybrid(text, apiKey, onEnd, onStatus) {
   const cleaned = String(text || '').replace(/^\[IMAGE_REQUEST\]\s*/i, '').trim();
   if (!cleaned) return onEnd?.();
   stopSpeech();
-  const generation = speechGeneration;
-  const controller = new AbortController();
-  const fallbackTimer = setTimeout(() => {
-    try { controller.abort(); } catch (_) {}
-    if (generation === speechGeneration) speakInstant(cleaned, onEnd);
-  }, 1350);
+  const run = speechRun;
+  const words = cleaned.split(/\s+/);
+  const firstText = words.slice(0, 9).join(' ');
+  const restText = words.slice(9).join(' ');
+  const c1 = new AbortController();
+  const c2 = new AbortController();
+  let fallbackStarted = false;
+
+  const fallback = () => {
+    if (fallbackStarted || run !== speechRun) return;
+    fallbackStarted = true;
+    try { c1.abort(); c2.abort(); } catch (_) {}
+    speakInstant(cleaned, onEnd, onStatus);
+  };
+
+  const fallbackTimer = setTimeout(fallback, 2400);
+  onStatus?.('تجهيز صوت طبيعي…');
 
   try {
-    const data = await fetchNaturalAudio(cleaned, apiKey, controller.signal);
+    const firstPromise = fetchNaturalAudio(firstText, apiKey, c1.signal);
+    const restPromise = restText ? fetchNaturalAudio(restText, apiKey, c2.signal).catch(() => null) : Promise.resolve(null);
+    const first = await firstPromise;
+    if (run !== speechRun || fallbackStarted) return;
     clearTimeout(fallbackTimer);
-    if (generation !== speechGeneration) return;
-    const audio = new Audio(`data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`);
-    activeAudio = audio;
-    audio.onended = () => {
-      if (activeAudio === audio) activeAudio = null;
-      if (generation === speechGeneration) onEnd?.();
-    };
-    audio.onerror = () => {
-      if (activeAudio === audio) activeAudio = null;
-      if (generation === speechGeneration) speakInstant(cleaned, onEnd);
-    };
-    await audio.play();
+    await playAudioData(first, run, onStatus);
+    const rest = await restPromise;
+    if (rest && run === speechRun) await playAudioData(rest, run, onStatus);
+    if (run === speechRun) {
+      onStatus?.('جاهز');
+      onEnd?.();
+    }
   } catch (error) {
     clearTimeout(fallbackTimer);
-    if (error?.name !== 'AbortError' && generation === speechGeneration) speakInstant(cleaned, onEnd);
+    if (error?.name !== 'AbortError') fallback();
   }
 }
 
@@ -144,9 +271,12 @@ function getLocalDateTimeReply(message) {
   return `الوقت الآن ${time} بتوقيت الرياض.`;
 }
 
-function SettingsPanel({ settings, setSettings, onClose }) {
+function SettingsPanel({ settings, setSettings, onClose, onTestVoice, voiceStatus }) {
   const toggle = key => setSettings(s => ({ ...s, [key]: !s[key] }));
-  const setMode = voiceMode => setSettings(s => ({ ...s, voiceMode }));
+  const arabicVoices = typeof window !== 'undefined' && window.speechSynthesis
+    ? (window.speechSynthesis.getVoices?.() || []).filter(v => /^ar([_-]|$)/i.test(v.lang || '')).length
+    : 0;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <section className="settings-panel" onClick={e => e.stopPropagation()}>
@@ -156,20 +286,21 @@ function SettingsPanel({ settings, setSettings, onClose }) {
         </div>
 
         <div className="setting-block">
-          <div className="setting-title"><b>سرعة الصوت</b><span>اختيار الوضع الافتراضي</span></div>
+          <div className="setting-title"><b>محرك الصوت</b><span>{voiceStatus}</span></div>
           <div className="segmented">
-            <button className={settings.voiceMode === 'instant' ? 'active' : ''} onClick={() => setMode('instant')}><Zap size={17}/>فوري</button>
-            <button className={settings.voiceMode === 'natural' ? 'active' : ''} onClick={() => setMode('natural')}><Volume2 size={17}/>طبيعي</button>
+            <button className={settings.voiceMode === 'instant' ? 'active' : ''} onClick={() => setSettings(s => ({ ...s, voiceMode: 'instant' }))}><Zap size={17}/>فوري</button>
+            <button className={settings.voiceMode === 'hybrid' ? 'active' : ''} onClick={() => setSettings(s => ({ ...s, voiceMode: 'hybrid' }))}><Volume2 size={17}/>ذكي</button>
           </div>
-          <p className="setting-note">الوضع الفوري هو الأسرع والأثبت على الآيفون. الطبيعي يحاول صوت Gemini ثم يتحول تلقائيًا للفوري إذا تأخر.</p>
+          <p className="setting-note">الذكي يستخدم Gemini TTS أولًا ثم يتحول تلقائيًا للصوت الفوري إذا تأخر. الأصوات العربية المتاحة على الجهاز: {arabicVoices}.</p>
+          <button className="ghost-btn" onClick={onTestVoice}><Volume2 size={18}/>اختبار الصوت الآن</button>
         </div>
 
         <div className="setting-row" onClick={() => toggle('voiceReplies')}>
-          <div><b>الرد بالصوت</b><span>تشغيل الصوت تلقائيًا بعد كل رد</span></div>
+          <div><b>الرد بالصوت</b><span>تشغيل الصوت بعد كل رد</span></div>
           <i className={settings.voiceReplies ? 'switch on' : 'switch'}><em/></i>
         </div>
         <div className="setting-row" onClick={() => toggle('continuousVoice')}>
-          <div><b>المحادثة المستمرة</b><span>يرد ثم يرجع يسمعك بدون ضغطة جديدة</span></div>
+          <div><b>المحادثة المستمرة</b><span>يرد ثم يرجع يسمعك تلقائيًا</span></div>
           <i className={settings.continuousVoice ? 'switch on' : 'switch'}><em/></i>
         </div>
         <div className="setting-row" onClick={() => toggle('rain')}>
@@ -183,18 +314,12 @@ function SettingsPanel({ settings, setSettings, onClose }) {
 
         <div className="setting-block api-box">
           <div className="setting-title"><b>Gemini API Key</b><span>{settings.geminiApiKey?.trim() ? 'مضاف' : 'اختياري إذا كان موجود على Vercel'}</span></div>
-          <input
-            type="password"
-            dir="ltr"
-            autoComplete="off"
-            placeholder="AIza..."
-            value={settings.geminiApiKey || ''}
-            onChange={e => setSettings(s => ({ ...s, geminiApiKey: e.target.value }))}
-          />
+          <input type="password" dir="ltr" autoComplete="off" placeholder="AIza..." value={settings.geminiApiKey || ''}
+            onChange={e => setSettings(s => ({ ...s, geminiApiKey: e.target.value }))}/>
         </div>
 
         <div className="panel-actions">
-          <button className="ghost-btn" onClick={() => setSettings({ voiceReplies: true, continuousVoice: true, voiceMode: 'instant', rain: true, motion: true, geminiApiKey: settings.geminiApiKey || '' })}><RotateCcw size={18}/>افتراضي</button>
+          <button className="ghost-btn" onClick={() => setSettings(s => ({ ...s, voiceReplies: true, continuousVoice: true, voiceMode: 'hybrid', rain: true, motion: true, voiceVersion: 4 }))}><RotateCcw size={18}/>افتراضي</button>
           <button className="primary-btn" onClick={onClose}>حفظ</button>
         </div>
       </section>
@@ -211,10 +336,7 @@ function ProjectPanel({ project, onClose }) {
           <div><small>لوحة المشروع</small><h2>{project.name}</h2></div>
           <button className="icon-btn" onClick={onClose}><X size={22}/></button>
         </div>
-        <div className="project-hero">
-          <div className="project-avatar">{project.letter}</div>
-          <div><h3>{project.name}</h3><p>{project.desc}</p></div>
-        </div>
+        <div className="project-hero"><div className="project-avatar">{project.letter}</div><div><h3>{project.name}</h3><p>{project.desc}</p></div></div>
         <div className="project-links">
           {project.app && <button onClick={() => window.open(project.app, '_blank', 'noopener,noreferrer')}><ExternalLink size={20}/>فتح الموقع</button>}
           <button onClick={() => window.open(project.repo, '_blank', 'noopener,noreferrer')}><Github size={20}/>فتح GitHub</button>
@@ -225,14 +347,15 @@ function ProjectPanel({ project, onClose }) {
 }
 
 export default function App() {
-  const defaults = { voiceReplies: true, continuousVoice: true, voiceMode: 'instant', rain: true, motion: true, geminiApiKey: '' };
+  const defaults = { voiceReplies: true, continuousVoice: true, voiceMode: 'hybrid', rain: true, motion: true, geminiApiKey: '', voiceVersion: 4 };
   const [settings, setSettings] = useState(() => {
-    try { return { ...defaults, ...(JSON.parse(localStorage.getItem('nawaf-ai-settings')) || {}) }; }
-    catch { return defaults; }
+    try {
+      const saved = JSON.parse(localStorage.getItem('nawaf-ai-settings')) || {};
+      if ((saved.voiceVersion || 0) < 4) return { ...defaults, geminiApiKey: saved.geminiApiKey || '' };
+      return { ...defaults, ...saved };
+    } catch { return defaults; }
   });
-  const [messages, setMessages] = useState(() => [
-    { role: 'assistant', text: 'جاهز لك. تكلم مباشرة أو اكتب، وبرد عليك بأسرع شكل ممكن.' }
-  ]);
+  const [messages, setMessages] = useState([{ role: 'assistant', text: 'جاهز لك. اضغط المايك وتكلم طبيعي.' }]);
   const [value, setValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
@@ -241,6 +364,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [project, setProject] = useState(null);
   const [search, setSearch] = useState('');
+  const [voiceStatus, setVoiceStatus] = useState('جاهز');
+  const [lastLatency, setLastLatency] = useState(null);
 
   const messagesRef = useRef(messages);
   const loadingRef = useRef(false);
@@ -260,8 +385,8 @@ export default function App() {
   useEffect(() => { scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, loading]);
   useEffect(() => {
     if (window.speechSynthesis) {
-      window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+      window.speechSynthesis.getVoices?.();
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices?.();
     }
   }, []);
 
@@ -270,7 +395,7 @@ export default function App() {
     return h < 12 ? 'صباح الخير يا نواف' : h < 18 ? 'مساء الخير يا نواف' : 'يا مساء الخير يا نواف';
   }, []);
 
-  const status = listening ? 'أسمعك الآن…' : speaking ? 'قاعد أرد عليك…' : loading ? 'أجهز الرد…' : settings.continuousVoice && restartWantedRef.current ? 'جاهز أسمعك تلقائيًا' : 'جاهز';
+  const status = listening ? 'أسمعك الآن…' : speaking ? voiceStatus : loading ? 'أجهز الرد…' : settings.continuousVoice && restartWantedRef.current ? 'جاهز أسمعك تلقائيًا' : 'جاهز';
 
   const clearRestartTimer = () => {
     if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
@@ -279,10 +404,7 @@ export default function App() {
 
   const stopRecognition = (abort = true) => {
     clearRestartTimer();
-    try {
-      if (abort) recognitionRef.current?.abort?.();
-      else recognitionRef.current?.stop?.();
-    } catch (_) {}
+    try { abort ? recognitionRef.current?.abort?.() : recognitionRef.current?.stop?.(); } catch (_) {}
     recognitionRef.current = null;
     setListening(false);
     listeningRef.current = false;
@@ -294,35 +416,43 @@ export default function App() {
     stopSpeech();
     setSpeaking(false);
     speakingRef.current = false;
+    setVoiceStatus('جاهز');
   };
 
   useEffect(() => () => stopEverything(), []);
 
-  const scheduleRestart = (delay = 320) => {
+  const scheduleRestart = (delay = 380) => {
     clearRestartTimer();
     if (!settings.continuousVoice || !restartWantedRef.current || loadingRef.current || speakingRef.current) return;
     restartTimerRef.current = setTimeout(() => {
-      if (settings.continuousVoice && restartWantedRef.current && !loadingRef.current && !speakingRef.current && !listeningRef.current) {
-        beginListening(true);
-      }
+      if (settings.continuousVoice && restartWantedRef.current && !loadingRef.current && !speakingRef.current && !listeningRef.current) beginListening(true);
     }, delay);
   };
 
   const finishSpeaking = () => {
     setSpeaking(false);
     speakingRef.current = false;
-    if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(360);
+    setVoiceStatus('جاهز');
+    if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(420);
   };
 
   const speakReply = text => {
     if (!settings.voiceReplies) {
-      if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(260);
+      if (settings.continuousVoice && restartWantedRef.current) scheduleRestart(280);
       return;
     }
     setSpeaking(true);
     speakingRef.current = true;
-    if (settings.voiceMode === 'natural') speakNaturalFast(text, settings.geminiApiKey, finishSpeaking);
-    else speakInstant(text, finishSpeaking);
+    if (settings.voiceMode === 'instant') speakInstant(text, finishSpeaking, setVoiceStatus);
+    else speakHybrid(text, settings.geminiApiKey, finishSpeaking, setVoiceStatus);
+  };
+
+  const testVoice = () => {
+    primeSpeech();
+    restartWantedRef.current = false;
+    setSpeaking(true);
+    speakingRef.current = true;
+    speakInstant('هلا نواف، هذا اختبار الصوت. إذا سمعتني كامل فالمحرك شغال مضبوط.', finishSpeaking, setVoiceStatus);
   };
 
   const maybeOpenDirectly = (message, reply = '') => {
@@ -339,21 +469,22 @@ export default function App() {
   const sendMessage = async (forcedText, fromVoice = false) => {
     const message = String(forcedText ?? value).trim();
     if (!message || loadingRef.current) return;
+    const startedAt = performance.now();
 
     stopRecognition(true);
     setError('');
     setValue('');
-    const userMessage = { role: 'user', text: message };
-    const next = [...messagesRef.current, userMessage];
+    const next = [...messagesRef.current, { role: 'user', text: message }];
     messagesRef.current = next;
     setMessages(next);
+    if (fromVoice) restartWantedRef.current = true;
 
     const localReply = getLocalDateTimeReply(message);
     if (localReply) {
       const completed = [...next, { role: 'assistant', text: localReply }];
       messagesRef.current = completed;
       setMessages(completed);
-      if (fromVoice) restartWantedRef.current = true;
+      setLastLatency(Math.round(performance.now() - startedAt));
       speakReply(localReply);
       return;
     }
@@ -361,17 +492,13 @@ export default function App() {
     maybeOpenDirectly(message);
     setLoading(true);
     loadingRef.current = true;
-    if (fromVoice) restartWantedRef.current = true;
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-      const history = next.slice(-8);
+      const timeout = setTimeout(() => controller.abort(), 12000);
       const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({ message, history, apiKey: settings.geminiApiKey?.trim() || undefined })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ message, history: next.slice(-6), apiKey: settings.geminiApiKey?.trim() || undefined })
       });
       clearTimeout(timeout);
       const data = await response.json();
@@ -380,6 +507,7 @@ export default function App() {
       const completed = [...next, { role: 'assistant', text: cleanText }];
       messagesRef.current = completed;
       setMessages(completed);
+      setLastLatency(Math.round(performance.now() - startedAt));
       maybeOpenDirectly(message, data.text);
       speakReply(cleanText);
     } catch (err) {
@@ -399,11 +527,10 @@ export default function App() {
       restartWantedRef.current = false;
       return;
     }
-    if (loadingRef.current || listeningRef.current) return;
+    if (loadingRef.current || listeningRef.current || speakingRef.current) return;
 
+    primeSpeech();
     stopSpeech();
-    setSpeaking(false);
-    speakingRef.current = false;
     stopRecognition(true);
     setError('');
     utteranceRef.current = '';
@@ -456,12 +583,12 @@ export default function App() {
       if (recognitionRef.current === recognition) recognitionRef.current = null;
       setListening(false);
       listeningRef.current = false;
-      const text = (finalText.trim() || utteranceRef.current.trim() || liveText.trim());
+      const text = finalText.trim() || utteranceRef.current.trim() || liveText.trim();
       if (text) {
         setValue('');
         sendMessage(text, true);
       } else if (!fatal && settings.continuousVoice && restartWantedRef.current) {
-        scheduleRestart(automatic ? 520 : 360);
+        scheduleRestart(automatic ? 520 : 380);
       }
     };
 
@@ -477,11 +604,13 @@ export default function App() {
   };
 
   const toggleMic = () => {
+    primeSpeech();
     if (listeningRef.current) {
       restartWantedRef.current = false;
       stopRecognition(true);
       return;
     }
+    if (speakingRef.current) stopSpeech();
     restartWantedRef.current = true;
     beginListening(false);
   };
@@ -489,6 +618,11 @@ export default function App() {
   const useQuickAction = action => {
     setValue(action.prompt);
     setTimeout(() => document.querySelector('.composer textarea')?.focus?.(), 0);
+  };
+
+  const replayLast = () => {
+    const last = [...messagesRef.current].reverse().find(m => m.role === 'assistant' && m.text);
+    if (last) speakReply(last.text);
   };
 
   const results = useMemo(() => {
@@ -504,102 +638,37 @@ export default function App() {
 
   return (
     <div className={`app ${settings.motion ? 'motion' : ''}`} dir="rtl">
-      <div className="ambient-bg"/>
-      {settings.rain && <div className="rain" aria-hidden="true"/>}
-
+      <div className="ambient-bg"/>{settings.rain && <div className="rain" aria-hidden="true"/>}
       <div className="app-shell">
         <header className="topbar">
-          <div className="brand">
-            <div className="brand-orb"><Bot size={24}/></div>
-            <div><b>Nawaf AI</b><span><i className={listening ? 'live' : speaking ? 'talking' : ''}/>{status}</span></div>
-          </div>
-          <div className="top-actions">
-            <button className="icon-btn" onClick={() => setSettingsOpen(true)}><Settings size={21}/></button>
-            <button className="icon-btn" onClick={stopEverything}><VolumeX size={21}/></button>
-          </div>
+          <div className="brand"><div className="brand-orb"><Bot size={24}/></div><div><b>Nawaf AI</b><span><i className={listening ? 'live' : speaking ? 'talking' : ''}/>{status}</span></div></div>
+          <div className="top-actions"><button className="icon-btn" onClick={() => setSettingsOpen(true)}><Settings size={21}/></button><button className="icon-btn" onClick={stopEverything}><VolumeX size={21}/></button></div>
         </header>
 
         <section className="hero">
-          <div className="hero-copy">
-            <span className="eyebrow"><Sparkles size={16}/>نسخة السرعة العالية</span>
-            <h1>{greeting}</h1>
-            <p>تكلم طبيعي. أسمعك، أرد عليك بسرعة، وبعدها أرجع أسمعك تلقائيًا.</p>
-          </div>
-          <button className={`big-mic ${listening ? 'listening' : speaking ? 'speaking' : ''}`} onClick={toggleMic} aria-label="بدء المحادثة الصوتية">
-            {listening ? <MicOff size={34}/> : <Mic size={34}/>}<span/>
-          </button>
+          <div className="hero-copy"><span className="eyebrow"><Sparkles size={16}/>Voice Engine v4</span><h1>{greeting}</h1><p>صوت أسرع، تشخيص مباشر، وإعادة تشغيل آخر رد بضغطة واحدة.</p></div>
+          <button className={`big-mic ${listening ? 'listening' : speaking ? 'speaking' : ''}`} onClick={toggleMic}>{listening ? <MicOff size={34}/> : <Mic size={34}/>}<span/></button>
         </section>
 
-        <div className="search-wrap">
-          <Search size={19}/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ابحث في الأدوات والمشاريع…"/>
-          {search && <button onClick={() => setSearch('')}><X size={17}/></button>}
-          {search && <div className="search-popover">
-            {results.length ? results.map(item => (
-              <button key={`${item.type}-${item.id}`} onClick={() => {
-                setSearch('');
-                if (item.type === 'project') setProject(item.data);
-                else useQuickAction(item.data);
-              }}><b>{item.title}</b><span>{item.sub}</span></button>
-            )) : <div className="no-result">ما لقيت شيء مطابق</div>}
-          </div>}
-        </div>
+        <div className="search-wrap"><Search size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="ابحث في الأدوات والمشاريع…"/>{search && <button onClick={() => setSearch('')}><X size={17}/></button>}{search && <div className="search-popover">{results.length ? results.map(item => <button key={`${item.type}-${item.id}`} onClick={() => { setSearch(''); item.type === 'project' ? setProject(item.data) : useQuickAction(item.data); }}><b>{item.title}</b><span>{item.sub}</span></button>) : <div className="no-result">ما لقيت شيء مطابق</div>}</div>}</div>
 
-        <section className="quick-grid">
-          {QUICK_ACTIONS.map(action => {
-            const Icon = action.icon;
-            return <button key={action.id} onClick={() => useQuickAction(action)}><span><Icon size={20}/></span><b>{action.title}</b></button>;
-          })}
-        </section>
+        <section className="quick-grid">{QUICK_ACTIONS.map(action => { const Icon = action.icon; return <button key={action.id} onClick={() => useQuickAction(action)}><span><Icon size={20}/></span><b>{action.title}</b></button>; })}</section>
 
         <section className="conversation-card">
           <div className="conversation-head">
-            <div><b>المحادثة</b><span>{settings.voiceMode === 'instant' ? 'صوت فوري' : 'صوت طبيعي سريع'}</span></div>
-            <button className="tiny-btn" onClick={() => { stopEverything(); setMessages([{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }]); messagesRef.current = [{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }]; }}><RotateCcw size={16}/>جديد</button>
+            <div><b>المحادثة</b><span>{settings.voiceMode === 'instant' ? 'صوت فوري' : 'صوت ذكي'}{lastLatency != null ? ` • رد ${lastLatency}ms` : ''}</span></div>
+            <div style={{display:'flex',gap:8}}><button className="tiny-btn" onClick={replayLast}><Volume2 size={16}/>أعد الصوت</button><button className="tiny-btn" onClick={() => { stopEverything(); const fresh = [{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }]; setMessages(fresh); messagesRef.current = fresh; }}><RotateCcw size={16}/>جديد</button></div>
           </div>
-
-          <div className="messages" ref={scrollRef}>
-            {messages.map((m, i) => <div key={i} className={`message ${m.role}`}><div>{m.text}</div></div>)}
-            {loading && <div className="message assistant"><div className="typing"><i/><i/><i/></div></div>}
-          </div>
-
+          <div className="messages" ref={scrollRef}>{messages.map((m, i) => <div key={i} className={`message ${m.role}`}><div>{m.text}</div></div>)}{loading && <div className="message assistant"><div className="typing"><i/><i/><i/></div></div>}</div>
           {error && <div className="error-box">{error}</div>}
-
-          <div className="composer">
-            <textarea
-              rows="1"
-              value={value}
-              onChange={e => setValue(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-              placeholder={listening ? 'أسمعك الآن…' : 'اكتب أو اضغط المايك وتكلم…'}
-            />
-            <button className={`composer-mic ${listening ? 'active' : ''}`} onClick={toggleMic}>{listening ? <MicOff size={23}/> : <Mic size={23}/>}</button>
-            <button className="send-btn" disabled={!value.trim() || loading} onClick={() => sendMessage()}><Send size={21}/></button>
-          </div>
+          <div className="composer"><textarea rows="1" value={value} onChange={e => setValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} placeholder={listening ? 'أسمعك الآن…' : 'اكتب أو اضغط المايك وتكلم…'}/><button className={`composer-mic ${listening ? 'active' : ''}`} onClick={toggleMic}>{listening ? <MicOff size={23}/> : <Mic size={23}/>}</button><button className="send-btn" disabled={!value.trim() || loading} onClick={() => sendMessage()}><Send size={21}/></button></div>
         </section>
 
-        <section className="projects-block">
-          <div className="section-head"><div><span>مشاريعي</span><h2>وصول مباشر</h2></div><MoreHorizontal size={22}/></div>
-          <div className="projects-grid">
-            {Object.entries(PROJECTS).map(([id, p]) => (
-              <button className="project-card" key={id} onClick={() => setProject(p)}>
-                <div className="project-mark">{p.letter}</div>
-                <div><b>{p.name}</b><span>{p.desc}</span></div>
-                <ExternalLink size={19}/>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <footer className="footer-note"><Zap size={15}/>مصمم للرد السريع والمحادثة المستمرة على الجوال</footer>
+        <section className="projects-block"><div className="section-head"><div><span>مشاريعي</span><h2>وصول مباشر</h2></div><MoreHorizontal size={22}/></div><div className="projects-grid">{Object.entries(PROJECTS).map(([id, p]) => <button className="project-card" key={id} onClick={() => setProject(p)}><div className="project-mark">{p.letter}</div><div><b>{p.name}</b><span>{p.desc}</span></div><ExternalLink size={19}/></button>)}</div></section>
+        <footer className="footer-note"><Zap size={15}/>Voice Engine v4 • Gemini 3.6 minimal thinking • محادثة مستمرة</footer>
       </div>
 
-      {settingsOpen && <SettingsPanel settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)}/>} 
+      {settingsOpen && <SettingsPanel settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} onTestVoice={testVoice} voiceStatus={voiceStatus}/>} 
       {project && <ProjectPanel project={project} onClose={() => setProject(null)}/>} 
     </div>
   );
