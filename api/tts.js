@@ -1,4 +1,4 @@
-const MODELS = ['gemini-2.5-flash-preview-tts', 'gemini-3.1-flash-tts-preview'];
+const MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'];
 
 function pcm16ToWavBase64(pcmBase64, sampleRate = 24000) {
   const pcm = Buffer.from(pcmBase64, 'base64');
@@ -37,15 +37,13 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
 
-  // Short prompt + limited chunk size keeps the same Aoede voice but reduces generation latency.
-  const speechText = String(text).replace(/\[IMAGE_REQUEST\]/g, '').trim().slice(0, 1800);
-  const prompt = `اقرئي هذا النص فقط بصوت Aoede العربي الطبيعي، نبرة سعودية خفيفة وودية، بسرعة مائلة للسرعة، بدون إضافة أي كلام:\n${speechText}`;
-
+  const prompt = `اقرئي النص التالي بصوت أنثوي سعودي شاب وطبيعي وواضح، بسرعة طبيعية مائلة للسرعة. لا تضيفي أي كلمة غير موجودة في النص.\n\n${text.slice(0, 1800)}`;
   let lastError;
+
   for (const model of MODELS) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12000);
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -65,7 +63,7 @@ export default async function handler(req, res) {
       const data = await response.json();
       if (!response.ok) {
         lastError = data?.error?.message || `TTS failed (${response.status})`;
-        if (response.status === 429 || response.status === 503 || response.status === 404) continue;
+        if ([404, 429, 503].includes(response.status)) continue;
         return res.status(response.status).json({ error: lastError, code: 'TTS_ERROR' });
       }
 
@@ -85,6 +83,7 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model });
     } catch (error) {
+      clearTimeout(timeout);
       lastError = error?.name === 'AbortError' ? 'TTS timeout' : (error?.message || 'TTS request failed');
     }
   }
