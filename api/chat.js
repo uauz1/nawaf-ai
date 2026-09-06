@@ -1,5 +1,29 @@
-const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-const FALLBACK_MODELS = ['gemini-3.7-flash', 'gemini-3.5-flash-lite'];
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const FALLBACK_MODELS = ['gemini-2.5-flash-lite'];
+
+function getRiyadhNow() {
+  const now = new Date();
+  const date = new Intl.DateTimeFormat('ar-SA-u-ca-gregory', {
+    timeZone: 'Asia/Riyadh',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  }).format(now);
+  const time = new Intl.DateTimeFormat('ar-SA', {
+    timeZone: 'Asia/Riyadh',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(now);
+  const iso = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Riyadh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+  return { date, time, iso };
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -15,15 +39,26 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message is required' });
 
-  const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
+  // الواجهة ترسل الرسالة الحالية داخل history أيضاً. حذف النسخة المكررة يقلل التوكنز والزمن.
+  const rawHistory = Array.isArray(history) ? history.slice(-20) : [];
+  const safeHistory = rawHistory.filter((item, index) => {
+    if (!item || typeof item.text !== 'string') return false;
+    const isLast = index === rawHistory.length - 1;
+    return !(isLast && item.role === 'user' && item.text.trim() === message.trim());
+  });
+
   const contents = [
-    ...safeHistory
-      .filter(item => item && typeof item.text === 'string')
-      .map(item => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.text.slice(0, 12000) }] })),
+    ...safeHistory.map(item => ({
+      role: item.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: item.text.slice(0, 12000) }]
+    })),
     { role: 'user', parts: [{ text: message.slice(0, 16000) }] }
   ];
 
+  const riyadh = getRiyadhNow();
   const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي الذكي والمباشر. أسلوبك سعودي طبيعي وسريع جدًا، خصوصًا في المحادثة الصوتية. لا تطيل إلا إذا احتاج الطلب تفاصيل.
+
+الوقت الحالي المؤكد في السعودية (Asia/Riyadh): ${riyadh.date}، الساعة ${riyadh.time}. التاريخ الميلادي الرقمي: ${riyadh.iso}. إذا سألك نواف عن اليوم أو التاريخ أو الوقت فاعتمد هذه المعلومة فقط ولا تخمّن من معلومات النموذج.
 
 افهم المقصود من السياق قبل الرد، وحلّل كلام نواف ومشاريعه وقراراته وربط المعلومات ببعضها بدل التعامل مع كل رسالة بشكل منفصل. المشروعان الأساسيان هما مُعين وقدّها.
 
@@ -34,7 +69,7 @@ export default async function handler(req, res) {
 - إذا طلب إنشاء صورة، اكتب وصف الصورة النهائي باختصار شديد وواضح، وابدأ الرد بعلامة [IMAGE_REQUEST] حتى تعرف الواجهة أن الطلب خاص بتوليد صورة. لا تدّع أن الصورة تم توليدها إذا لم ترجع أداة فعلية نتيجة.
 - لا تدّع تنفيذ شيء لم يحدث فعلاً.
 - لا تعيد سؤالًا سبق أن أجاب عنه.
-- خذ وأعط معه طبيعي، لكن اجعل الرد الصوتي قصيرًا غالبًا من جملة إلى ثلاث جمل.
+- في الحوار العادي اجعل الرد غالبًا من جملة إلى ثلاث جمل حتى يبدأ الصوت بسرعة. زد التفاصيل فقط عندما يطلبها.
 - عندما يوجد أكثر من احتمال، اختر الأنسب من السياق بدل كثرة الأسئلة، إلا إذا كان التنفيذ مستحيلًا بدون معلومة ناقصة.
 - أعطِ الأولوية للسرعة والفائدة العملية.` }] };
 
@@ -43,14 +78,15 @@ export default async function handler(req, res) {
   try {
     for (const model of models) {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents,
           systemInstruction,
           generationConfig: {
-            temperature: 0.68,
-            maxOutputTokens: 1100,
-            topP: 0.92
+            temperature: 0.62,
+            maxOutputTokens: 520,
+            topP: 0.9
           }
         })
       });
@@ -58,7 +94,7 @@ export default async function handler(req, res) {
       if (response.ok) {
         const text = data?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('').trim();
         if (!text) { lastError = { status: 502, message: 'Empty response from Gemini' }; continue; }
-        return res.status(200).json({ text, model });
+        return res.status(200).json({ text, model, riyadhDate: riyadh.iso });
       }
       const errorMessage = data?.error?.message || 'Gemini request failed';
       lastError = { status: response.status, message: errorMessage };
