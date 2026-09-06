@@ -1,5 +1,3 @@
-const LIVE_MODEL = 'gemini-3.1-flash-live-preview';
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -17,19 +15,12 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+        'x-goog-api-key': apiKey
       },
       body: JSON.stringify({
         uses: 1,
         expireTime,
-        newSessionExpireTime,
-        liveConnectConstraints: {
-          model: `models/${LIVE_MODEL}`,
-          config: {
-            sessionResumption: {},
-            responseModalities: ['AUDIO']
-          }
-        }
+        newSessionExpireTime
       })
     });
 
@@ -42,7 +33,7 @@ export default async function handler(req, res) {
     }
 
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ token: data.name, model: LIVE_MODEL, expiresAt: expireTime });
+    return res.status(200).json({ token: data.name, expiresAt: expireTime });
   } catch (error) {
     console.error('Live token error', error);
     return res.status(500).json({ error: 'تعذر تجهيز جلسة الصوت المباشر', code: 'LIVE_TOKEN_SERVER_ERROR' });
