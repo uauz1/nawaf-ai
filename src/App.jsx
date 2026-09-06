@@ -233,7 +233,7 @@ export default function App() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, history: [...messagesRef.current, { role: 'user', text: message }].slice(-6) })
+        body: JSON.stringify({ message, history: messagesRef.current.slice(-6) })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || 'تعذر الحصول على رد');
@@ -288,70 +288,28 @@ export default function App() {
             <p>{activeVoice ? 'المحادثة المباشرة شغالة. تكلم طبيعي، والصوت يجي من Gemini مباشرة.' : 'اضغط المايك مرة واحدة. أول مرة سيطلب Safari إذن الميكروفون فقط.'}</p>
           </div>
           <button className={`big-mic ${listening ? 'listening' : speaking ? 'speaking' : ''}`} onClick={toggleMic} aria-label="تشغيل أو إيقاف المحادثة الصوتية">
-            {activeVoice ? <MicOff size={34}/> : <Mic size={34}/>}<span/>
-          </button>
+            {activeVoice ? <MicOff size={34}/> : <Mic size={34}/>}<span/></button>
         </section>
 
         <div className="search-wrap">
-          <Search size={19}/>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ابحث في الأدوات والمشاريع…"/>
+          <Search size={19}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="ابحث في الأدوات والمشاريع…"/>
           {search && <button onClick={() => setSearch('')}><X size={17}/></button>}
-          {search && <div className="search-popover">
-            {results.length ? results.map(item => (
-              <button key={`${item.type}-${item.id}`} onClick={() => {
-                setSearch('');
-                item.type === 'project' ? setProject(item.data) : useQuickAction(item.data);
-              }}><b>{item.title}</b><span>{item.sub}</span></button>
-            )) : <div className="no-result">ما لقيت شيء مطابق</div>}
-          </div>}
+          {search && <div className="search-popover">{results.length ? results.map(item => <button key={`${item.type}-${item.id}`} onClick={() => { setSearch(''); item.type === 'project' ? setProject(item.data) : useQuickAction(item.data); }}><b>{item.title}</b><span>{item.sub}</span></button>) : <div className="no-result">ما لقيت شيء مطابق</div>}</div>}
         </div>
 
-        <section className="quick-grid">
-          {QUICK_ACTIONS.map(action => {
-            const Icon = action.icon;
-            return <button key={action.id} onClick={() => useQuickAction(action)}><span><Icon size={20}/></span><b>{action.title}</b></button>;
-          })}
-        </section>
+        <section className="quick-grid">{QUICK_ACTIONS.map(action => { const Icon = action.icon; return <button key={action.id} onClick={() => useQuickAction(action)}><span><Icon size={20}/></span><b>{action.title}</b></button>; })}</section>
 
         <section className="conversation-card">
           <div className="conversation-head">
             <div><b>المحادثة</b><span>{activeVoice ? 'Live صوت لصوت' : 'نص سريع'}{lastLatency != null ? ` • ${lastLatency}ms` : ''}</span></div>
-            <button className="tiny-btn" onClick={() => {
-              stopLive();
-              const fresh = [{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }];
-              messagesRef.current = fresh;
-              setMessages(fresh);
-            }}><RotateCcw size={16}/>جديد</button>
+            <button className="tiny-btn" onClick={() => { stopLive(); const fresh = [{ role: 'assistant', text: 'بدأنا من جديد. وش تحتاج؟' }]; messagesRef.current = fresh; setMessages(fresh); }}><RotateCcw size={16}/>جديد</button>
           </div>
-
-          <div className="messages" ref={scrollRef}>
-            {messages.map((m, i) => <div key={i} className={`message ${m.role}`}><div>{m.text}</div></div>)}
-            {liveUserText && <div className="message user"><div>{liveUserText}</div></div>}
-            {liveAssistantText && <div className="message assistant"><div>{liveAssistantText}</div></div>}
-            {loading && <div className="message assistant"><div className="typing"><i/><i/><i/></div></div>}
-          </div>
-
+          <div className="messages" ref={scrollRef}>{messages.map((m, i) => <div key={i} className={`message ${m.role}`}><div>{m.text}</div></div>)}{liveUserText && <div className="message user"><div>{liveUserText}</div></div>}{liveAssistantText && <div className="message assistant"><div>{liveAssistantText}</div></div>}{loading && <div className="message assistant"><div className="typing"><i/><i/><i/></div></div>}</div>
           {error && <div className="error-box">{error}</div>}
-
-          <div className="composer">
-            <textarea rows="1" value={value} onChange={e => setValue(e.target.value)} onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTextMessage(); }
-            }} placeholder={activeVoice ? 'المحادثة الصوتية شغالة… أو اكتب هنا' : 'اكتب أو اضغط المايك للمحادثة المباشرة…'}/>
-            <button className={`composer-mic ${activeVoice ? 'active' : ''}`} onClick={toggleMic}>{activeVoice ? <MicOff size={23}/> : <Mic size={23}/>}</button>
-            <button className="send-btn" disabled={!value.trim() || loading} onClick={sendTextMessage}><Send size={21}/></button>
-          </div>
+          <div className="composer"><textarea rows="1" value={value} onChange={e => setValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTextMessage(); } }} placeholder={activeVoice ? 'المحادثة الصوتية شغالة… أو اكتب هنا' : 'اكتب أو اضغط المايك للمحادثة المباشرة…'}/><button className={`composer-mic ${activeVoice ? 'active' : ''}`} onClick={toggleMic}>{activeVoice ? <MicOff size={23}/> : <Mic size={23}/>}</button><button className="send-btn" disabled={!value.trim() || loading} onClick={sendTextMessage}><Send size={21}/></button></div>
         </section>
 
-        <section className="projects-block">
-          <div className="section-head"><div><span>مشاريعي</span><h2>وصول مباشر</h2></div><MoreHorizontal size={22}/></div>
-          <div className="projects-grid">
-            {Object.entries(PROJECTS).map(([id, p]) => (
-              <button className="project-card" key={id} onClick={() => setProject(p)}>
-                <div className="project-mark">{p.letter}</div><div><b>{p.name}</b><span>{p.desc}</span></div><ExternalLink size={19}/>
-              </button>
-            ))}
-          </div>
-        </section>
+        <section className="projects-block"><div className="section-head"><div><span>مشاريعي</span><h2>وصول مباشر</h2></div><MoreHorizontal size={22}/></div><div className="projects-grid">{Object.entries(PROJECTS).map(([id, p]) => <button className="project-card" key={id} onClick={() => setProject(p)}><div className="project-mark">{p.letter}</div><div><b>{p.name}</b><span>{p.desc}</span></div><ExternalLink size={19}/></button>)}</div></section>
 
         <footer className="footer-note"><Zap size={15}/>Gemini 3.1 Flash Live • صوت أصلي مباشر • بدون speechSynthesis</footer>
       </div>
