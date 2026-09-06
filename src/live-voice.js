@@ -71,6 +71,7 @@ export class GeminiLiveVoice {
     this.sendMic = true;
     this.inputText = '';
     this.outputText = '';
+    this.lastAudioAt = 0;
   }
 
   emitState(state, detail = '') {
@@ -85,7 +86,7 @@ export class GeminiLiveVoice {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) throw new Error('Web Audio غير مدعوم على هذا الجهاز');
 
-    this.audioContext = new AudioCtx();
+    this.audioContext = new AudioCtx({ latencyHint: 'interactive' });
     try { await this.audioContext.resume(); } catch (_) {}
 
     const streamPromise = navigator.mediaDevices.getUserMedia({
@@ -136,15 +137,15 @@ export class GeminiLiveVoice {
               thinkingConfig: { thinkingLevel: 'minimal' }
             },
             systemInstruction: {
-              parts: [{ text: 'أنت Nawaf AI، مساعد نواف الشخصي. تحدث بالعربية السعودية الطبيعية بصوت أنثوي شاب وواضح. رد بسرعة وباختصار، غالبًا جملة أو جملتين. لا تكرر السؤال. إذا قاطعك نواف، توقف واسمعه.' }]
+              parts: [{ text: 'أنت Nawaf AI، مساعد نواف الشخصي. تحدث بالعربية السعودية الطبيعية بصوت أنثوي شاب وواضح. رد بسرعة وباختصار، غالبًا جملة أو جملتين. لا تكرر السؤال. إذا قاطعك نواف، توقف فورًا واسمعه ثم رد على آخر كلامه. لا تطوّل الصمت بين الأدوار.' }]
             },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
             realtimeInputConfig: {
               automaticActivityDetection: {
                 disabled: false,
-                prefixPaddingMs: 120,
-                silenceDurationMs: 480
+                prefixPaddingMs: 80,
+                silenceDurationMs: 320
               }
             }
           }
@@ -159,6 +160,7 @@ export class GeminiLiveVoice {
           clearTimeout(timer);
           settled = true;
           this.ready = true;
+          this.sendMic = true;
           this.emitState('listening', 'أسمعك الآن…');
           this.startMicPipeline();
           resolve();
@@ -181,7 +183,7 @@ export class GeminiLiveVoice {
         const parts = content.modelTurn?.parts || [];
         for (const part of parts) {
           if (part.inlineData?.data) {
-            this.sendMic = false;
+            this.lastAudioAt = performance.now();
             this.emitState('speaking', 'قاعد أرد عليك…');
             this.playPCM(part.inlineData.data, parseRate(part.inlineData.mimeType, 24000));
           }
@@ -190,7 +192,7 @@ export class GeminiLiveVoice {
         if (content.interrupted) {
           this.stopPlayback();
           this.sendMic = true;
-          this.emitState('listening', 'أسمعك الآن…');
+          this.emitState('listening', 'سمعت مقاطعتك…');
         }
 
         if (content.turnComplete || content.generationComplete) {
@@ -203,7 +205,7 @@ export class GeminiLiveVoice {
             if (this.closed) return;
             this.sendMic = true;
             this.emitState('listening', 'أسمعك الآن…');
-          }, Math.min(wait + 80, 6000));
+          }, Math.min(wait + 40, 3500));
         }
       };
 
@@ -225,7 +227,7 @@ export class GeminiLiveVoice {
   startMicPipeline() {
     if (!this.audioContext || !this.stream || !this.ws) return;
     this.source = this.audioContext.createMediaStreamSource(this.stream);
-    this.processor = this.audioContext.createScriptProcessor(2048, 1, 1);
+    this.processor = this.audioContext.createScriptProcessor(1024, 1, 1);
     this.sink = this.audioContext.createGain();
     this.sink.gain.value = 0;
 
@@ -254,6 +256,7 @@ export class GeminiLiveVoice {
   playPCM(base64, sampleRate = 24000) {
     if (!this.audioContext || this.closed) return;
     try {
+      if (this.audioContext.state === 'suspended') this.audioContext.resume().catch(() => {});
       const bytes = base64ToBytes(base64);
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       const length = Math.floor(bytes.byteLength / 2);
@@ -268,7 +271,7 @@ export class GeminiLiveVoice {
       source.buffer = buffer;
       source.connect(this.audioContext.destination);
       const now = this.audioContext.currentTime;
-      const startAt = Math.max(now + 0.025, this.nextPlayTime || 0);
+      const startAt = Math.max(now + 0.012, this.nextPlayTime || 0);
       this.nextPlayTime = startAt + buffer.duration;
       this.playingSources.add(source);
       source.onended = () => this.playingSources.delete(source);
