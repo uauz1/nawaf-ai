@@ -25,6 +25,13 @@ function getRiyadhNow() {
   return { date, time, iso };
 }
 
+function isDirectDateTimeQuestion(message) {
+  const text = String(message || '').trim();
+  const asksDate = /(وش|ايش|إيش|ما هو|ماهي|كم).*(التاريخ|تاريخ اليوم)|\bتاريخ اليوم\b|اليوم كم|وش اليوم|اي يوم/i.test(text);
+  const asksTime = /(وش|ايش|إيش|كم).*(الوقت|الساعة)|كم الساعة|وش الوقت|الوقت الحين|الساعة كم/i.test(text);
+  return { asksDate, asksTime };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -38,6 +45,17 @@ export default async function handler(req, res) {
 
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message is required' });
+
+  const riyadh = getRiyadhNow();
+  const direct = isDirectDateTimeQuestion(message);
+  if (direct.asksDate || direct.asksTime) {
+    let text;
+    if (direct.asksDate && direct.asksTime) text = `اليوم ${riyadh.date}، والوقت الآن ${riyadh.time} بتوقيت الرياض.`;
+    else if (direct.asksDate) text = `اليوم ${riyadh.date}.`;
+    else text = `الوقت الآن ${riyadh.time} بتوقيت الرياض.`;
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    return res.status(200).json({ text, model: 'system-clock', riyadhDate: riyadh.iso });
+  }
 
   // الواجهة ترسل الرسالة الحالية داخل history أيضاً. حذف النسخة المكررة يقلل التوكنز والزمن.
   const rawHistory = Array.isArray(history) ? history.slice(-20) : [];
@@ -55,7 +73,6 @@ export default async function handler(req, res) {
     { role: 'user', parts: [{ text: message.slice(0, 16000) }] }
   ];
 
-  const riyadh = getRiyadhNow();
   const systemInstruction = { parts: [{ text: `أنت Nawaf AI، مساعد نواف الشخصي الذكي والمباشر. أسلوبك سعودي طبيعي وسريع جدًا، خصوصًا في المحادثة الصوتية. لا تطيل إلا إذا احتاج الطلب تفاصيل.
 
 الوقت الحالي المؤكد في السعودية (Asia/Riyadh): ${riyadh.date}، الساعة ${riyadh.time}. التاريخ الميلادي الرقمي: ${riyadh.iso}. إذا سألك نواف عن اليوم أو التاريخ أو الوقت فاعتمد هذه المعلومة فقط ولا تخمّن من معلومات النموذج.
@@ -94,6 +111,7 @@ export default async function handler(req, res) {
       if (response.ok) {
         const text = data?.candidates?.[0]?.content?.parts?.map(part => part?.text || '').join('').trim();
         if (!text) { lastError = { status: 502, message: 'Empty response from Gemini' }; continue; }
+        res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({ text, model, riyadhDate: riyadh.iso });
       }
       const errorMessage = data?.error?.message || 'Gemini request failed';
