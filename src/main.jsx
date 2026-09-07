@@ -5,6 +5,7 @@ import './smart-options.js';
 import App from './App.jsx';
 import './styles.css';
 import './smart-options.css';
+import './static-ui.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
