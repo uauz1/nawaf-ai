@@ -1,4 +1,5 @@
 const MODEL = 'gemini-3.1-flash-tts-preview';
+const VOICE = 'Aoede';
 
 function pcm16ToWavBase64(pcmBase64, sampleRate = 24000) {
   const pcm = Buffer.from(pcmBase64, 'base64');
@@ -37,9 +38,9 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(503).json({ error: 'Gemini API key is not configured', code: 'MISSING_API_KEY' });
   if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Text is required' });
 
-  const prompt = `اقرئي النص التالي بصوت عربي شاب طبيعي وواضح، وبسرعة محادثة طبيعية مائلة للسرعة. لا تضيفي أي كلمة غير موجودة في النص.\n\n${text.slice(0, 1200)}`;
+  const prompt = `اقرئي النص التالي فقط. الصوت أنثوي شاب وواضح وطبيعي، بلهجة سعودية خفيفة، بسرعة محادثة طبيعية ومريحة، ومن دون نبرة آلية أو مبالغة. لا تضيفي أي كلمة غير موجودة في النص.\n\n${text.slice(0, 1000)}`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6500);
+  const timeout = setTimeout(() => controller.abort(), 8500);
 
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
@@ -51,8 +52,8 @@ export default async function handler(req, res) {
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {
-            languageCode: 'ar-XA',
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } }
+            languageCode: 'ar',
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } }
           }
         }
       })
@@ -74,7 +75,7 @@ export default async function handler(req, res) {
       : pcm16ToWavBase64(part.inlineData.data, sampleRate);
 
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: 'Aoede', model: MODEL });
+    return res.status(200).json({ audioBase64: wavBase64, mimeType: 'audio/wav', voice: VOICE, model: MODEL, language: 'ar' });
   } catch (error) {
     clearTimeout(timeout);
     if (error?.name === 'AbortError') return res.status(504).json({ error: 'TTS timeout', code: 'TTS_TIMEOUT' });
