@@ -1,0 +1,3 @@
+.app *, .app *::before, .app *::after { animation: none !important; }
+.rain, .mascot-v2, .mascot-v2-stage, [class*='mascot'] { display: none !important; }
+.ambient-bg { animation: none !important; }
